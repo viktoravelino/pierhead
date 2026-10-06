@@ -55,6 +55,17 @@ describe("the activity log", () => {
     expect(store.recent({ app: "net" })).toEqual([]);
   });
 
+  test("a rename or clone shows up under the app it made as well, and survives a restart", () => {
+    const store = createStateStore(dir);
+    store.record(
+      entry(1, { op: "apps:rename", app: null, target: "a -> b", newName: "b" }),
+    );
+    store.record(entry(2, { app: "a" }));
+    expect(store.recent({ app: "b" }).map((e) => e.op)).toEqual(["apps:rename"]);
+    expect(store.recent({ app: "a" })).toHaveLength(1);
+    expect(createStateStore(dir).recent({ app: "b" })[0]?.newName).toBe("b");
+  });
+
   test("keeps at most maxEntries, in memory and on disk, rewriting the file once it is a tenth over", () => {
     const store = createStateStore(dir, { maxEntries: 10 });
     for (let i = 0; i < 11; i++) store.record(entry(i));

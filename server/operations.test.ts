@@ -15,6 +15,7 @@ import {
   preflight,
   restoreToSave,
   runSteps,
+  settleRename,
   streamSteps,
 } from "./operations";
 import { createStateStore } from "./state";
@@ -47,6 +48,8 @@ type HostOptions = {
   extras?: Record<string, Partial<Extras>>;
   /** What `builds:list <app> --format json` prints, per app; `[]` otherwise. */
   builds?: Record<string, unknown[]>;
+  /** The global deploy branch; unset (empty) otherwise. */
+  globalBranch?: string;
 };
 
 /** `network:list` entries: a Dokku-managed network or one Docker keeps for itself. */
@@ -60,7 +63,7 @@ const dockerNetworks = [
 /** A host with these apps, as Dokku's reports would show them. */
 function fakeHost(
   apps: Record<string, Reports>,
-  { locked = [], extras = {}, builds = {} }: HostOptions = {},
+  { locked = [], extras = {}, builds = {}, globalBranch = "" }: HostOptions = {},
 ): DokkuRun {
   const names = Object.keys(apps);
   const reportOf = (plugin: keyof Reports, app: string | undefined) => {
@@ -93,6 +96,8 @@ function fakeHost(
           : fail(`App ${app} does not exist`);
       case "network:list":
         return ok(JSON.stringify(dockerNetworks));
+      case "git:report:global":
+        return ok(JSON.stringify({ "global-deploy-branch": globalBranch }));
       case "domains:report:global":
         return ok(
           JSON.stringify({
@@ -403,45 +408,74 @@ describe("what a proxy:disable remembers", () => {
     expect(store.restoreOf("hello")).toBeUndefined();
   });
 
-  test("a rename hands the entry to the new name, replacing a stale one there, with the old default vhost swapped", () => {
+  // The host as it is once Dokku has destroyed the old app: only `survivors` exist.
+  const hostWith =
+    (survivors: string[]): DokkuRun =>
+    async (name, ...args) =>
+      name === "apps:exists"
+        ? survivors.includes(String(args[0]))
+          ? ok("")
+          : fail(`App ${String(args[0])} does not exist`)
+        : host(name, ...args);
+  const renameReq = {
+    op: "apps:rename",
+    app: "hello",
+    newName: "hello-2",
+    skipDeploy: false,
+    confirm: "hello",
+  } as const;
+
+  test("a rename hands the entry to the new name, replacing a stale one there, with the old default vhost swapped for every global domain", async () => {
     store.saveRestore("hello", {
       ports: saved.ports,
-      domains: ["hello.dokku.localhost", "a.example.com", "hello.example.com"],
+      domains: [
+        "hello.dokku.localhost",
+        "hello.lab.local",
+        "a.example.com",
+        "hello.example.com",
+      ],
     });
     store.saveRestore("hello-2", { ports: [], domains: ["stale.example.com"] });
-    afterSuccess(
-      store,
-      {
-        op: "apps:rename",
-        app: "hello",
-        newName: "hello-2",
-        skipDeploy: false,
-        confirm: "hello",
-      },
-      null,
-      { name: "hello", globalDomain: "dokku.localhost" },
-    );
+    await settleRename(hostWith(["hello-2"]), store, renameReq);
     expect(store.restoreOf("hello")).toBeUndefined();
     expect(store.restoreOf("hello-2")).toEqual({
       ports: saved.ports,
-      domains: ["hello-2.dokku.localhost", "a.example.com", "hello.example.com"],
+      domains: [
+        "hello-2.dokku.localhost",
+        "hello-2.lab.local",
+        "a.example.com",
+        "hello.example.com",
+      ],
     });
   });
 
-  test("a rename of an app with no entry still drops a stale one under the new name", () => {
-    store.saveRestore("hello-2", saved);
-    afterSuccess(
-      store,
-      {
-        op: "apps:rename",
-        app: "hello",
-        newName: "hello-2",
-        skipDeploy: true,
-        confirm: "hello",
-      },
-      null,
-    );
+  test("it moves whatever the rename's outcome, since the old app is gone even when its redeploy failed", async () => {
+    // The caller runs it after success and failure alike; all it looks at is the old app.
+    store.saveRestore("hello", saved);
+    await settleRename(hostWith([]), store, renameReq);
+    expect(store.restoreOf("hello-2")).toEqual(saved);
+  });
+
+  test("while the old app still exists nothing moves, and neither does anything when the check fails", async () => {
+    store.saveRestore("hello", saved);
+    await settleRename(hostWith(["hello"]), store, renameReq);
+    expect(store.restoreOf("hello")).toEqual(saved);
     expect(store.restoreOf("hello-2")).toBeUndefined();
+    const broken: DokkuRun = async () => fail("ssh: connection refused");
+    await settleRename(broken, store, renameReq);
+    expect(store.restoreOf("hello")).toEqual(saved);
+  });
+
+  test("a rename of an app with no entry still drops a stale one under the new name", async () => {
+    store.saveRestore("hello-2", saved);
+    await settleRename(hostWith(["hello-2"]), store, renameReq);
+    expect(store.restoreOf("hello-2")).toBeUndefined();
+  });
+
+  test("other operations are left alone by settleRename", async () => {
+    store.saveRestore("hello", saved);
+    await settleRename(hostWith([]), store, { op: "ps:restart", app: "hello" });
+    expect(store.restoreOf("hello")).toEqual(saved);
   });
 
   test("a clone keeps the source's entry and gives the copy none", () => {
@@ -898,6 +932,14 @@ describe("preflight: rename and clone", () => {
     }
   });
 
+  test("a rename may take one of the app's own custom domains as its name; a clone may not", async () => {
+    expect(await refusal(rename("multi.dokku.localhost", "hello-multi"))).toBeNull();
+    expect(await refusal(clone("multi.dokku.localhost", "hello-multi"))).toMatchObject({
+      status: 409,
+      kind: "domain-in-use",
+    });
+  });
+
   test("an unknown source is a 404, before the target is looked at", async () => {
     expect(await refusal(rename("fresh", "nope"))).toMatchObject({
       status: 404,
@@ -950,6 +992,19 @@ describe("preflight: global settings", () => {
     ]) {
       expect(await preflight(locked, req)).toEqual({ ok: true, app: null });
     }
+  });
+
+  test("setting the global deploy branch to what it is, or clearing an unset one, is a 409", async () => {
+    const set = fakeHost({ hello: running }, { globalBranch: "main" });
+    const branch = (b: string): OperationRequest => ({ op: "git:set-global", branch: b });
+    expect(await refusal(branch("main"), set)).toMatchObject({
+      status: 409,
+      kind: "conflict",
+    });
+    expect(await refusal(branch("release"), set)).toBeNull();
+    expect(await refusal(branch(""), set)).toBeNull();
+    expect(await refusal(branch(""))).toMatchObject({ status: 409, kind: "conflict" });
+    expect(await refusal(branch("main"))).toBeNull();
   });
 
   test("adding only domains that are there is a 409; one new among them is fine", async () => {

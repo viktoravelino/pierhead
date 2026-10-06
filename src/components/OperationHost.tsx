@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { CircleCheck, CircleX, LoaderCircle, Plus, X } from "lucide-react";
 import {
   createContext,
@@ -132,6 +132,8 @@ export function OperationHost({ children }: { children: ReactNode }) {
   const [lines, setLines] = useState<string[]>([]);
   // A failure shown in the form, so what was typed survives it.
   const [formError, setFormError] = useState<string | null>(null);
+  // After a failed rename or clone: the app it made, which Dokku creates before it deploys.
+  const [made, setMade] = useState<string | null>(null);
   const notify = useToast();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -156,6 +158,30 @@ export function OperationHost({ children }: { children: ReactNode }) {
                 reason:
                   "Read-only: the server was started without PIERHEAD_ALLOW_WRITES=true.",
               };
+
+  /**
+   * A rename or clone fails after the new app exists whenever its deploy fails, and a
+   * rename has already destroyed the old one: look the new name up, and for a rename move
+   * to it (the old page is gone), for a clone offer a link.
+   */
+  const checkMade = async (
+    req: Extract<OperationRequest, { op: "apps:rename" | "apps:clone" }>,
+    message: string,
+  ) => {
+    const apps = await queryClient
+      .fetchQuery({ ...appsQuery, staleTime: 0 })
+      .catch(() => null);
+    if (!apps?.some((a) => a.name === req.newName)) return;
+    setMade(req.newName);
+    if (req.op === "apps:rename") {
+      notify({
+        message: `Renamed ${req.app} to ${req.newName}, but the deploy failed.`,
+        detail: message,
+        tone: "error",
+      });
+      void navigate({ to: "/apps/$appName", params: { appName: req.newName } });
+    }
+  };
 
   const mutation = useMutation({
     mutationFn: (req: OperationRequest) =>
@@ -186,6 +212,9 @@ export function OperationHost({ children }: { children: ReactNode }) {
     },
     onError: (error, req) => {
       const { message } = describeError(error);
+      if (req.op === "apps:rename" || req.op === "apps:clone") {
+        void checkMade(req, message);
+      }
       // The ps buttons have no form to keep open, so they report in a toast.
       if (psOperationIds.some((id) => id === req.op)) {
         setOpened(null);
@@ -215,6 +244,7 @@ export function OperationHost({ children }: { children: ReactNode }) {
   const confirm = (confirmed: OperationRequest) => {
     setLines([]);
     setFormError(null);
+    setMade(null);
     mutation.mutate(confirmed);
   };
 
@@ -287,6 +317,9 @@ export function OperationHost({ children }: { children: ReactNode }) {
               {lines.length > 0 ? lines.join("\n") : "Waiting for output..."}
             </pre>
             {failed && <p className="text-pretty text-crit">{failed}</p>}
+            {failed && made && (
+              <MadeNote op={panel.op} name={made} onGo={() => setPanel(null)} />
+            )}
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-faint">
                 {running ? "Closing this does not stop the operation." : ""}
@@ -309,12 +342,39 @@ export function OperationHost({ children }: { children: ReactNode }) {
             writes={writes}
             running={running}
             error={formError}
+            made={made}
             onSubmit={confirm}
             onCancel={() => setOpened(null)}
           />
         )}
       </dialog>
     </OperationContext>
+  );
+}
+
+/** What a failed rename or clone left: the new app exists, but its deploy failed. */
+function MadeNote({
+  op,
+  name,
+  onGo,
+}: {
+  op: OperationRequest["op"];
+  name: string;
+  onGo: () => void;
+}) {
+  return (
+    <p className="text-pretty text-sm text-dim">
+      The deploy failed, but {op === "apps:rename" ? "the app was renamed and " : ""}
+      <Link
+        to="/apps/$appName"
+        params={{ appName: name }}
+        onClick={onGo}
+        className="font-mono font-medium text-accent hover:underline"
+      >
+        {name}
+      </Link>{" "}
+      exists. It is not running; fix the cause, then rebuild it.
+    </p>
   );
 }
 
@@ -325,6 +385,7 @@ function OperationForm({
   writes,
   running,
   error,
+  made,
   onSubmit,
   onCancel,
 }: {
@@ -333,6 +394,7 @@ function OperationForm({
   writes: Writes;
   running: boolean;
   error: string | null;
+  made: string | null;
   onSubmit: (request: OperationRequest) => void;
   onCancel: () => void;
 }) {
@@ -412,6 +474,7 @@ function OperationForm({
           {error}
         </p>
       )}
+      {error && made && <MadeNote op={current.op} name={made} onGo={onCancel} />}
 
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} className={secondaryButton}>

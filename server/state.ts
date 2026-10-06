@@ -32,7 +32,8 @@ const outcomes = ["ok", "refused", "failed"] as const;
 /** Narrows one parsed line; a line that does not fit (a hand edit, a torn write) is skipped. */
 function toOperationRecord(value: unknown): OperationRecord | null {
   if (!isRecord(value)) return null;
-  const { at, op, app, target, actor, outcome, durationMs, message, restart } = value;
+  const { at, op, app, target, actor, outcome, durationMs, message, restart, newName } =
+    value;
   const known = outcomes.find((o) => o === outcome);
   if (
     typeof at !== "string" ||
@@ -44,7 +45,8 @@ function toOperationRecord(value: unknown): OperationRecord | null {
     known === undefined ||
     typeof durationMs !== "number" ||
     typeof message !== "string" ||
-    (restart !== undefined && typeof restart !== "boolean")
+    (restart !== undefined && typeof restart !== "boolean") ||
+    (newName !== undefined && typeof newName !== "string")
   ) {
     return null;
   }
@@ -58,6 +60,7 @@ function toOperationRecord(value: unknown): OperationRecord | null {
     durationMs,
     message,
     ...(restart === undefined ? {} : { restart }),
+    ...(newName === undefined ? {} : { newName }),
   };
 }
 
@@ -175,9 +178,15 @@ export function createStateStore(
       }
     },
 
-    /** Attempts newest first, for one app when `app` is given, at most `limit` when it is. */
+    /**
+     * Attempts newest first, for one app when `app` is given (a rename or clone belongs
+     * to the app it made as well), at most `limit` when it is.
+     */
     recent({ limit, app }: { limit?: number; app?: string } = {}) {
-      const matching = app === undefined ? entries : entries.filter((e) => e.app === app);
+      const matching =
+        app === undefined
+          ? entries
+          : entries.filter((e) => e.app === app || e.newName === app);
       const newest = matching.toReversed();
       return limit === undefined ? newest : newest.slice(0, limit);
     },

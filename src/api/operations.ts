@@ -365,7 +365,12 @@ export function conflictProblem(req: OperationRequest, apps: readonly AppSummary
       if (apps.some((a) => a.name === req.newName)) {
         return `An app named ${req.newName} already exists.`;
       }
-      const owner = apps.find((a) => a.domains.includes(req.newName));
+      // A renamed app keeps its own domains, so one of them may become the new name.
+      const owner = apps.find(
+        (a) =>
+          a.domains.includes(req.newName) &&
+          !(req.op === "apps:rename" && a.name === req.app),
+      );
       return owner ? `${req.newName} is already a domain of ${owner.name}.` : null;
     }
     case "domains:add":

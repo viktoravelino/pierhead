@@ -57,6 +57,7 @@ import {
   preflight,
   restoreToSave,
   runSteps,
+  settleRename,
   streamSteps,
 } from "./operations";
 import { createStateStore, loadStateDir } from "./state";
@@ -114,6 +115,8 @@ type Attempt = {
   target: string;
   actor: string | null;
   startedAt: number;
+  /** Rename and clone: the name they make. */
+  newName?: string;
 };
 
 /**
@@ -123,7 +126,7 @@ type Attempt = {
  * carry a config value.
  */
 function logOperation(
-  { op, app, target, actor, startedAt }: Attempt,
+  { op, app, target, actor, startedAt, newName }: Attempt,
   outcome: OperationRecord["outcome"],
   reason = "",
   message = reason,
@@ -140,6 +143,7 @@ function logOperation(
     outcome,
     durationMs,
     message: message.slice(0, maxMessage),
+    ...(newName === undefined ? {} : { newName }),
   });
 }
 
@@ -522,7 +526,14 @@ const app = new Hono()
     }
 
     const target = targetOf(req);
-    const attempt: Attempt = { op, app: appOf(req), target, actor, startedAt };
+    const attempt: Attempt = {
+      op,
+      app: appOf(req),
+      target,
+      actor,
+      startedAt,
+      ...("newName" in req ? { newName: req.newName } : {}),
+    };
     // Before any read of the host: a typo in the name costs nothing.
     const confirm = destructiveConfirm(req);
     if (confirm && confirm.typed !== confirm.expected) {
@@ -549,6 +560,7 @@ const app = new Hono()
     if (!streamsOutput(req, checked.app)) {
       const result = await runSteps(dokku, steps);
       invalidateFor(req);
+      await settleRename(dokku, state, req);
       if (!result.ok) {
         const known = failureRefusal(req, result.error);
         if (known) {
@@ -563,7 +575,7 @@ const app = new Hono()
         logOperation(attempt, "refused", `conflict: ${noOp}`);
         return c.json(invalid("conflict", noOp), 409);
       }
-      afterSuccess(state, req, saved, checked.app);
+      afterSuccess(state, req, saved);
       logOperation(attempt, "ok");
       return c.json({ ok: true, output: result.output } as const);
     }
@@ -581,12 +593,13 @@ const app = new Hono()
       try {
         const error = await streamSteps(dokku, steps, (line) => send("output", { line }));
         if (error) end = { kind: "failed", message: error.message };
-        else afterSuccess(state, req, saved, checked.app);
+        else afterSuccess(state, req, saved);
       } catch (e) {
         end = { kind: "failed", message: e instanceof Error ? e.message : String(e) };
       } finally {
         // A failed deploy can still have changed the app, so drop the cache either way.
         invalidateFor(req);
+        await settleRename(dokku, state, req).catch(() => {});
         clearInterval(heartbeat);
       }
       if (end.kind === "failed") logOperation(attempt, "failed", end.message);
