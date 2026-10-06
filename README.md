@@ -109,6 +109,8 @@ bun run format     # biome check --write
 
 The `Dockerfile` builds one image: the UI (`VITE_DATA_SOURCE=api`) and the API server bundled with `bun build --target bun`, on `oven/bun:1.4-slim` with only `openssh-client` added, running as the non-root `bun` user (uid 1000). The server serves `dist/` itself when `NODE_ENV=production` (set in the image) or `PIERHEAD_STATIC_DIR` is set: hashed `/assets/*` are immutable, `index.html` is `no-cache`, and any other non-`/api` GET falls back to `index.html`. Health stays at `/api/health`; the image's `HEALTHCHECK` uses it (so it reports unhealthy while Dokku is unreachable).
 
+Every push to `main` builds a multi-arch (`linux/amd64`, `linux/arm64`) image and pushes it to GHCR as `ghcr.io/viktoravelino/pierhead` (tags `latest`, `main`, `sha-<short>`; `v*` tags add semver). Pull it with `docker pull ghcr.io/viktoravelino/pierhead:latest`. To build locally or ship without the registry, build and use `docker save | docker load`:
+
 ```sh
 docker build -t pierhead:local .   # add --platform linux/amd64 when building on arm64 for an amd64 host
 docker run -d --init -p 127.0.0.1:3010:3001 \
