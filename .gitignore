@@ -1,0 +1,13 @@
+node_modules
+dist
+*.local
+*.tsbuildinfo
+.DS_Store
+.vite
+npm-debug.log*
+.env*
+!.env.example
+!.env.lab.example
+
+# Local test environment (dev SSH key, known_hosts)
+.dev

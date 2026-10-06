@@ -1,0 +1,75 @@
+name: pierhead
+
+# Local, throwaway test environment. Driven by scripts/dev.sh (bun run dev:up).
+services:
+  dokku:
+    image: dokku/dokku:0.38.31
+    container_name: pierhead-dokku
+    environment:
+      # Apps become `hello.dokku.localhost`; *.localhost resolves to 127.0.0.1.
+      DOKKU_HOSTNAME: dokku.localhost
+      # Dokku hands these paths to the host Docker daemon when it bind-mounts app
+      # data into sibling containers, so they must be HOST paths. With a named volume
+      # the host path is the volume's _data dir inside OrbStack's Linux VM, which is
+      # where the daemon runs (a macOS path like /var/lib/dokku would not exist there).
+      DOKKU_HOST_ROOT: /var/lib/docker/volumes/pierhead_dokku-data/_data/home/dokku
+      DOKKU_LIB_HOST_ROOT: /var/lib/docker/volumes/pierhead_dokku-data/_data/var/lib/dokku
+    volumes:
+      - dokku-data:/mnt/dokku
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      # nginx only; SSH stays on the compose network.
+      - "127.0.0.1:8080:80"
+
+  # Host metrics source. Locally it reports the Docker VM; in production the same web API
+  # comes from Glances installed on the Dokku host (port 61208). No docker socket: only
+  # system stats are read. `-w` serves the REST API at /api/4/*.
+  glances:
+    image: nicolargo/glances:4.5.7-full
+    container_name: pierhead-glances
+    restart: unless-stopped
+    pid: host
+    environment:
+      GLANCES_OPT: "-w"
+    ports:
+      - "127.0.0.1:61208:61208"
+
+  pierhead:
+    build:
+      context: .
+      dockerfile: docker/dev.Dockerfile
+    container_name: pierhead-dev
+    depends_on:
+      - dokku
+      - glances
+    environment:
+      DOKKU_SSH_HOST: dokku
+      DOKKU_SSH_PORT: "22"
+      DOKKU_SSH_USER: dokku
+      DOKKU_SSH_KEY: /run/dev-ssh/id_ed25519
+      DOKKU_SSH_KNOWN_HOSTS: /run/dev-state/known_hosts
+      # Allow start/stop/restart/rebuild. Safe here only because this Dokku is the
+      # throwaway local one above; leave it unset (read-only) for any real host.
+      PIERHEAD_ALLOW_WRITES: "true"
+      GLANCES_URL: http://glances:61208
+      API_URL: http://127.0.0.1:3001
+      # Read the real backend; plain `bun run dev` (no backend) defaults to mock data.
+      VITE_DATA_SOURCE: api
+    volumes:
+      - .:/app
+      - node-modules:/app/node_modules
+      - ./.dev/ssh:/run/dev-ssh:ro
+      - ./.dev/state:/run/dev-state
+    ports:
+      - "127.0.0.1:5173:5173"
+      - "127.0.0.1:3001:3001"
+    command:
+      - sh
+      - -c
+      - bun install --frozen-lockfile && { bun run dev:server & exec bun --bun run dev --host 0.0.0.0; }
+
+volumes:
+  dokku-data:
+    name: pierhead_dokku-data
+  node-modules:
+    name: pierhead_node-modules

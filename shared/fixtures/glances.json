@@ -1,0 +1,73 @@
+{
+  "cpu": {
+    "total": 17.9,
+    "user": 5.8,
+    "nice": 0.0,
+    "system": 12.0,
+    "idle": 82.1,
+    "iowait": 0.0,
+    "irq": 0.0,
+    "steal": 0.0,
+    "guest": 0.0,
+    "cpucore": 14,
+    "time_since_update": 23.48894214630127
+  },
+  "mem": {
+    "total": 16818978816,
+    "available": 15540322304,
+    "percent": 7.6,
+    "used": 1278656512,
+    "free": 14481240064,
+    "active": 298242048,
+    "inactive": 759422976,
+    "buffers": 163840,
+    "cached": 1346007040,
+    "shared": 23756800,
+    "percent_min": 7.6,
+    "percent_max": 8.0,
+    "percent_mean": 7.73
+  },
+  "fs": [
+    {
+      "device_name": "/dev/vdb1",
+      "fs_type": "btrfs",
+      "mnt_point": "/etc/resolv.conf",
+      "options": "rw,noatime,nodatasum,nodatacow,ssd,discard,space_cache=v2,subvolid=256,subvol=/docker",
+      "size": 705448378368,
+      "used": 19837329408,
+      "free": 685611048960,
+      "percent": 2.8,
+      "key": "mnt_point"
+    },
+    {
+      "device_name": "/dev/vdb1",
+      "fs_type": "btrfs",
+      "mnt_point": "/etc/hostname",
+      "options": "rw,noatime,nodatasum,nodatacow,ssd,discard,space_cache=v2,subvolid=256,subvol=/docker",
+      "size": 705448378368,
+      "used": 19837329408,
+      "free": 685611048960,
+      "percent": 2.8,
+      "key": "mnt_point"
+    }
+  ],
+  "load": {
+    "min1": 1.55859375,
+    "min5": 0.80029296875,
+    "min15": 0.66796875,
+    "cpucore": 14
+  },
+  "system": {
+    "os_name": "Linux",
+    "hostname": "fdc5b07d617a",
+    "platform": "64bit",
+    "os_version": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+    "linux_distro": "Alpine Linux 3.24.2",
+    "hr_name": "Alpine Linux 3.24.2 64bit / Linux 7.0.14-orbstack-00380-ga7e0a2dc9535"
+  },
+  "uptime": "4 days, 20:58:22",
+  "core": {
+    "phys": 14,
+    "log": 14
+  }
+}

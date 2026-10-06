@@ -1,0 +1,9 @@
+{
+  "$schema": "https://biomejs.dev/schemas/latest/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": { "includes": ["**", "!assets", "!public"] },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 90 },
+  "linter": { "enabled": true },
+  "css": { "parser": { "tailwindDirectives": true } },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+}

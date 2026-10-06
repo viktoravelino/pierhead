@@ -1,0 +1,168 @@
+@import "tailwindcss";
+@import "@fontsource-variable/schibsted-grotesk";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+/*
+ * Design tokens. One declaration per token via light-dark(): the OS preference applies by
+ * default, and the toggle's data-theme attribute overrides it in both directions.
+ * Neutrals are tinted toward the brand teal; status colours live in their own lane.
+ */
+:root {
+  color-scheme: light dark;
+
+  --bg: light-dark(#eaf1f1, #081114);
+  --panel: light-dark(#f7fafa, #0d181c);
+  --raised: light-dark(#ffffff, #132228);
+  --sunken: light-dark(#dde8e8, #060d0f);
+  --line: light-dark(#cfdcdc, #1b2d33);
+  --line-strong: light-dark(#aebfc1, #2c454d);
+
+  --fg: light-dark(#0f2124, #d8e6e8);
+  --fg-dim: light-dark(#466166, #8fa9ae);
+  --fg-faint: light-dark(#738d91, #5f7a80);
+
+  /* Brand teal, from assets/icon.svg. */
+  --accent: light-dark(#0d9488, #2dc7b4);
+  --accent-fg: light-dark(#ffffff, #03211e);
+
+  /* Signal lane: running / underway / fault / idle. Never reused as accent. */
+  --ok: light-dark(#2b8a44, #7fd68b);
+  --warn: light-dark(#a1600a, #f3b63d);
+  --crit: light-dark(#c0352b, #ff7b69);
+  --idle: light-dark(#667c80, #8a9fa3);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+@theme inline {
+  --font-sans: "Schibsted Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-dim: var(--fg-dim);
+  --color-faint: var(--fg-faint);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-crit: var(--crit);
+  --color-idle: var(--idle);
+}
+
+@layer base {
+  html {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    min-height: 100dvh;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  button:not(:disabled),
+  summary,
+  [role="tab"] {
+    cursor: pointer;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--accent) 35%, transparent);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+
+  dialog {
+    color: inherit;
+  }
+}
+
+@layer components {
+  /* Faint depth-sounding grid, used behind the host strip like a chart margin. */
+  .chart-dots {
+    background-image: radial-gradient(var(--line-strong) 0.75px, transparent 0.75px);
+    background-size: 14px 14px;
+    background-position: -7px -7px;
+  }
+
+  .label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@keyframes pulse-signal {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+}
+
+.animate-signal {
+  animation: pulse-signal 1.4s ease-in-out infinite;
+}
+
+.animate-toast {
+  animation: toast-in 0.18s ease-out;
+}
+
+dialog[open] {
+  animation: dialog-in 0.14s ease-out;
+}
+
+dialog::backdrop {
+  background: color-mix(in oklab, var(--bg) 70%, black);
+  opacity: 0.8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-signal,
+  .animate-toast,
+  dialog[open] {
+    animation: none;
+  }
+}
