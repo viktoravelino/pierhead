@@ -22,7 +22,7 @@ services:
       - "127.0.0.1:8080:80"
 
   # Host metrics source. Locally it reports the Docker VM; in production the same web API
-  # comes from Glances installed on the Dokku host (port 61208). No docker socket: only
+  # comes from a Glances container on the Dokku host (port 61208). No docker socket: only
   # system stats are read. `-w` serves the REST API at /api/4/*.
   glances:
     image: nicolargo/glances:4.5.7-full

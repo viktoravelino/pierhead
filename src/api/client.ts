@@ -1,7 +1,8 @@
 // THE SEAM. Every read and action the UI performs goes through this module, and it is the
-// only place that knows which data source is active. In "api" mode apps and host info come
-// from the backend (./backend); everything else, and everything in "mock" mode, is served
-// from fixtures after a small artificial delay. Nothing outside src/api should import
+// only place that knows which data source is active. In "api" mode apps, host, metrics,
+// networks, logs, config and actions go through the backend (./backend); deploy history,
+// activity and backups, and everything in "mock" mode, are served from fixtures after a
+// small artificial delay. Nothing outside src/api should import
 // mock-data.ts.
 
 import { type AppActionId, appActions, commandLine } from "../../shared/actions";
