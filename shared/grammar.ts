@@ -194,3 +194,45 @@ export const networkAttachments = [
 /** The `type=count` form `ps:scale` takes. */
 export const formatFormationEntry = ({ type, count }: FormationEntry) =>
   `${type}=${count}`;
+
+/** One path component of an image name, as Docker's reference grammar has it. */
+const imageComponent = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
+
+const imageRef = new RegExp(
+  // `registry[:port]/`, then `path/to/name`, then `:tag`, then `@sha256:digest`.
+  `^(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?/)?${imageComponent}(?:/${imageComponent})*` +
+    "(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(?:@sha256:[a-f0-9]{64})?$",
+);
+
+/**
+ * A Docker image reference for `git:from-image`: `[registry[:port]/]path[:tag][@sha256:digest]`
+ * in lowercase. Nothing a shell or `docker pull` could read as a flag (no leading `-`).
+ */
+export const isImageRef = (image: string) => image.length <= 255 && imageRef.test(image);
+
+const hostName = "[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?";
+const gitPath = "[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?";
+const httpsUrl = new RegExp(`^https://${hostName}(?::[0-9]{1,5})?/${gitPath}$`);
+const scpUrl = new RegExp(`^git@${hostName}:${gitPath}$`);
+
+/**
+ * A repository for `git:sync`: `https://host/path` or `git@host:path`. No userinfo
+ * (`user:token@` would land in Dokku's output and in the activity log), no query or
+ * fragment, no `file://`, no local path, and no `ssh://` or `git://`: only the two forms
+ * a public or deploy-key repository normally has.
+ */
+export const isGitUrl = (url: string) =>
+  url.length <= 500 &&
+  (httpsUrl.test(url) || scpUrl.test(url)) &&
+  !url.split(/[/:]/).includes("..");
+
+/**
+ * A branch, tag or commit for `git:sync` and `deploy-branch`: `/`-separated words of
+ * letters, digits, dots, underscores and hyphens; not starting with `-`, no `..`, no
+ * empty segment.
+ */
+export const isGitRef = (ref: string) =>
+  ref.length <= 255 &&
+  /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(ref) &&
+  !ref.startsWith("-") &&
+  !ref.includes("..");

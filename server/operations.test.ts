@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import dockerOptions from "../shared/fixtures/docker-options-report.json";
 import multiDomain from "../shared/fixtures/multi-domain.json";
 import networkAttached from "../shared/fixtures/network-report-attached.json";
@@ -13,11 +13,11 @@ import {
   afterSuccess,
   failureRefusal,
   preflight,
-  proxyRestore,
   restoreToSave,
   runSteps,
   streamSteps,
 } from "./operations";
+import { createStateStore } from "./state";
 
 type Report = Record<string, string>;
 type Reports = Record<
@@ -335,7 +335,10 @@ describe("preflight: domains and ports", () => {
 });
 
 describe("what a proxy:disable remembers", () => {
-  afterEach(() => proxyRestore.clear());
+  let store = createStateStore(null);
+  beforeEach(() => {
+    store = createStateStore(null);
+  });
 
   const detailOf = async (reports: Reports, app: string) => {
     const result = await preflight(fakeHost({ [app]: reports }), {
@@ -374,10 +377,10 @@ describe("what a proxy:disable remembers", () => {
   const saved = { ports: [{ scheme: "http", host: 80, container: 80 }], domains: [] };
 
   test("a successful disable stores it, and a disable with nothing to save drops a stale entry", () => {
-    afterSuccess(disable("hello"), saved);
-    expect(proxyRestore.get("hello")).toEqual(saved);
-    afterSuccess(disable("hello"), null);
-    expect(proxyRestore.has("hello")).toBe(false);
+    afterSuccess(store, disable("hello"), saved);
+    expect(store.restoreOf("hello")).toEqual(saved);
+    afterSuccess(store, disable("hello"), null);
+    expect(store.restoreOf("hello")).toBeUndefined();
   });
 
   test("enable, create and destroy clear the entry; other operations leave it", () => {
@@ -387,13 +390,13 @@ describe("what a proxy:disable remembers", () => {
       { op: "apps:destroy", app: "hello", confirm: "hello" },
     ];
     for (const req of clearing) {
-      proxyRestore.set("hello", saved);
-      afterSuccess(req, null);
-      expect(proxyRestore.has("hello")).toBe(false);
+      store.saveRestore("hello", saved);
+      afterSuccess(store, req, null);
+      expect(store.restoreOf("hello")).toBeUndefined();
     }
-    proxyRestore.set("hello", saved);
-    afterSuccess({ op: "ps:restart", app: "hello" }, null);
-    expect(proxyRestore.has("hello")).toBe(true);
+    store.saveRestore("hello", saved);
+    afterSuccess(store, { op: "ps:restart", app: "hello" }, null);
+    expect(store.restoreOf("hello")).toEqual(saved);
   });
 });
 

@@ -71,11 +71,12 @@ export const cacheKeys = {
   host: "host",
   app: (name: string) => `app:${name}`,
   config: (name: string) => `config:${name}`,
+  builds: (name: string) => `builds:${name}`,
 };
 
 /**
- * Drops what a change to `name` can alter: its detail, its config names, the list and the
- * networks (which are derived from every app's report).
+ * Drops what a change to `name` can alter: its detail, its config names, its build records,
+ * the list and the networks (which are derived from every app's report).
  */
 export function invalidateApp(cache: ReadCache, name: string) {
   cache.invalidate(
@@ -84,6 +85,7 @@ export function invalidateApp(cache: ReadCache, name: string) {
     cacheKeys.storage,
     cacheKeys.app(name),
     cacheKeys.config(name),
+    cacheKeys.builds(name),
   );
 }
 

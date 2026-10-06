@@ -4,6 +4,7 @@ import { stripAnsi } from "../shared/parse";
 import type { AppDetail, PortMapping, ProxyRestore } from "../shared/types";
 import { domainOwners, getApp, isNotFound, listNetworks } from "./apps";
 import type { DokkuError, DokkuRun, DokkuSteps } from "./dokku";
+import type { StateStore } from "./state";
 
 // What `POST /api/operations/:op` does around the shared table: checks against the live
 // host before anything runs, running the steps, and the one thing pierhead remembers.
@@ -175,6 +176,9 @@ export async function preflight(
     case "ps:restart":
     case "ps:rebuild":
     case "ps:scale":
+    case "git:from-image":
+    case "git:sync":
+    case "git:set":
     case "builder:set":
     case "resource:set":
     case "resource:clear":
@@ -275,13 +279,6 @@ const samePort = (a: PortMapping, b: PortMapping) =>
   a.scheme === b.scheme && a.host === b.host && a.container === b.container;
 
 /**
- * What apps had when their proxy was disabled through pierhead: Dokku clears the port map
- * and the domains then, and `proxy:enable` brings back only the default domain. In
- * memory: a restart forgets them, and the enable dialog then has nothing to restore.
- */
-export const proxyRestore = new Map<string, ProxyRestore>();
-
-/**
  * Read from the live detail before `proxy:disable` runs: what it is about to clear (set
  * ports, custom domains), null when there is nothing to lose or for any other request.
  */
@@ -296,18 +293,25 @@ export function restoreToSave(req: OperationRequest, app: AppDetail | null) {
   return ports.length > 0 || domains.length > 0 ? { ports, domains } : null;
 }
 
-/** Bookkeeping after a request succeeded; `saved` is what `restoreToSave` read. */
-export function afterSuccess(req: OperationRequest, saved: ProxyRestore | null) {
+/**
+ * Bookkeeping after a request succeeded; `saved` is what `restoreToSave` read. What a
+ * disable cleared is kept in the state store, so a restart does not forget it.
+ */
+export function afterSuccess(
+  store: Pick<StateStore, "saveRestore" | "clearRestore">,
+  req: OperationRequest,
+  saved: ProxyRestore | null,
+) {
   switch (req.op) {
     case "proxy:disable":
-      if (saved) proxyRestore.set(req.app, saved);
-      else proxyRestore.delete(req.app);
+      if (saved) store.saveRestore(req.app, saved);
+      else store.clearRestore(req.app);
       return;
     // A new app must not inherit a destroyed one's entry, and an enable consumes it.
     case "proxy:enable":
     case "apps:create":
     case "apps:destroy":
-      proxyRestore.delete(req.app);
+      store.clearRestore(req.app);
       return;
     default:
       return;

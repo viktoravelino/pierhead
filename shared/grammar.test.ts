@@ -6,6 +6,9 @@ import {
   isCpu,
   isDomain,
   isExistingStorageName,
+  isGitRef,
+  isGitUrl,
+  isImageRef,
   isMemory,
   isNetworkAlias,
   isNetworkName,
@@ -302,6 +305,108 @@ describe("storage", () => {
     expect(isSafeContainerPath("/a@b")).toBe(true);
     for (const p of ["data", "/a/../b", "/a:ro", "/a b", "/a;b", "/a'b"]) {
       expect(isSafeContainerPath(p)).toBe(false);
+    }
+  });
+});
+
+describe("image references", () => {
+  test("accepts registry, path, tag and digest forms", () => {
+    for (const image of [
+      "nginx",
+      "nginx:alpine",
+      "library/nginx:1.27-alpine",
+      "ghcr.io/dokku/smoke-test_app:v1.2.3",
+      "localhost:5000/team/app:dev",
+      `nginx@sha256:${"a".repeat(64)}`,
+      `nginx:1.27@sha256:${"0".repeat(64)}`,
+    ]) {
+      expect(isImageRef(image)).toBe(true);
+    }
+  });
+
+  test("refuses flags, shell text, spaces, uppercase names and malformed tags", () => {
+    for (const image of [
+      "",
+      "-x",
+      "--rm",
+      "nginx:alpine; rm",
+      "nginx alpine",
+      "nginx\nalpine",
+      "$(id)",
+      "Nginx",
+      "nginx:",
+      "nginx:-x",
+      "nginx@sha256:abc",
+      "nginx//x",
+      "/nginx",
+      `${"a".repeat(256)}`,
+    ]) {
+      expect(isImageRef(image)).toBe(false);
+    }
+  });
+});
+
+describe("git URLs and refs", () => {
+  test("accepts https URLs and git@host:path", () => {
+    for (const url of [
+      "https://github.com/dokku/smoke-test-app",
+      "https://github.com/crccheck/docker-hello-world.git",
+      "https://git.example.com:8443/team/sub/repo",
+      "git@github.com:owner/repo.git",
+    ]) {
+      expect(isGitUrl(url)).toBe(true);
+    }
+  });
+
+  test("refuses local paths, other schemes, credentials, flags and shell text", () => {
+    for (const url of [
+      "",
+      "file:///tmp",
+      "file:///etc/passwd",
+      "/tmp/x",
+      "./repo",
+      "-x",
+      "--upload-pack=x",
+      "ssh://git@host/owner/repo",
+      "git://host/owner/repo",
+      "http://github.com/owner/repo",
+      "https://user:token@github.com/owner/repo",
+      "https://github.com",
+      "https://github.com/owner/repo?x=1",
+      "https://github.com/owner/repo#main",
+      "https://github.com/owner/repo extra",
+      "https://github.com/../repo",
+      "https://github.com/owner/repo;rm",
+      "git@host:/abs/path",
+      "git@host:../x",
+      "evil@host:owner/repo",
+    ]) {
+      expect(isGitUrl(url)).toBe(false);
+    }
+  });
+
+  test("refs are branch, tag or sha words, never a flag", () => {
+    for (const ref of [
+      "main",
+      "release/1.2",
+      "v1.0.0",
+      "5c8a5e42bbd7fae98bd657fb17f41c6019b303f9",
+    ]) {
+      expect(isGitRef(ref)).toBe(true);
+    }
+    for (const ref of [
+      "",
+      "-x",
+      "a b",
+      "a;b",
+      "a..b",
+      "../x",
+      "a//b",
+      "a/",
+      "$HEAD",
+      "a:b",
+    ]) {
+      expect(isGitRef(ref)).toBe(false);
     }
   });
 });

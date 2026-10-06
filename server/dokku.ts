@@ -6,6 +6,9 @@ import {
   isContainerPath,
   isCpu,
   isExistingStorageName,
+  isGitRef,
+  isGitUrl,
+  isImageRef,
   isMemory,
   isNetworkAlias,
   isNetworkName,
@@ -44,6 +47,9 @@ export const shellQuote = (arg: string) => `'${arg.replaceAll("'", `'\\''`)}'`;
 
 /** Bounds for `logs` history; the route defaults and clamps its query to these. */
 export const logTail = { default: 100, max: 1000 } as const;
+
+/** Dokku's build ids are 14 base-36 characters; the check only has to keep a flag or a second word out. */
+export const isBuildId = (id: string) => /^[a-z0-9]{6,32}$/.test(id);
 
 /** `<plugin>:report` as JSON: for one app, or (no app) one object per line for every app. */
 const report = (plugin: string) => (app?: string) => [
@@ -90,6 +96,13 @@ const commands = {
   "git:report:global": globalReport("git"),
   "ps:scale": (app: string) => ["ps:scale", appArg(app), "--format", "json"],
   "storage:list": (app: string) => ["storage:list", appArg(app), "--format", "json"],
+  // The app's last 20 builds and deploys, newest first.
+  "builds:list": (app: string) => ["builds:list", appArg(app), "--format", "json"],
+  // The log of one record. Dokku prints `no such build` (exit 1) for an id it lacks.
+  "builds:output": (app: string, id: string) => {
+    if (!isBuildId(id)) throw new Error(`Invalid build id: ${JSON.stringify(id)}`);
+    return ["builds:output", appArg(app), id];
+  },
   // Docker networks on the host, and the registered SSH keys and plugins.
   "network:list": () => ["network:list", "--format", "json"],
   "plugin:list": () => ["plugin:list", "--format", "json"],
@@ -310,6 +323,43 @@ const mountStep =
     return [name, appArg(app), mount];
   };
 
+/** `git:from-image <app> <image>`: no committer name or email, so Dokku uses its defaults. */
+const imageStep: StepBuilder = ([app = "", image = "", ...rest]) => {
+  if (rest.length > 0) throw new Error("Unexpected arguments for git:from-image");
+  if (!isImageRef(image)) throw new Error(`Invalid image: ${JSON.stringify(image)}`);
+  return ["git:from-image", appArg(app), image];
+};
+
+/** `git:sync [--build] <app> <url> [<ref>]`; `--build-if-changes` and `--skip-deploy-branch` are not offered. */
+const syncStep: StepBuilder = (args) => {
+  const build = args[0] === "--build";
+  const [app = "", url = "", ref, ...rest] = build ? args.slice(1) : args;
+  if (rest.length > 0) throw new Error("Unexpected arguments for git:sync");
+  if (!isGitUrl(url)) throw new Error(`Invalid git URL: ${JSON.stringify(url)}`);
+  if (ref !== undefined && !isGitRef(ref)) {
+    throw new Error(`Invalid git ref: ${JSON.stringify(ref)}`);
+  }
+  return [
+    "git:sync",
+    ...(build ? ["--build"] : []),
+    appArg(app),
+    url,
+    ...(ref === undefined ? [] : [ref]),
+  ];
+};
+
+/** `git:set <app> deploy-branch [<branch>]`; no branch clears. */
+const gitSetStep: StepBuilder = ([app = "", property = "", ...values]) => {
+  if (property !== "deploy-branch" || values.length > 1) {
+    throw new Error("Unexpected arguments for git:set");
+  }
+  const [branch] = values;
+  if (branch !== undefined && !isGitRef(branch)) {
+    throw new Error(`Invalid branch: ${JSON.stringify(branch)}`);
+  }
+  return ["git:set", appArg(app), property, ...values];
+};
+
 /**
  * The writes behind `POST /api/operations/:op`, keyed by Dokku command. Each re-checks the
  * argv the shared operations table built (the server never trusts the client), so a
@@ -340,6 +390,11 @@ const operationSteps = {
   "network:set": networkSetStep,
   "docker-options:add": aliasStep("docker-options:add", true),
   "docker-options:remove": aliasStep("docker-options:remove", false),
+  // Both pull code and deploy it, so the route streams them; the git URL and ref are
+  // grammar-checked (no characters a shell reads), so they need no quoting.
+  "git:from-image": imageStep,
+  "git:sync": syncStep,
+  "git:set": gitSetStep,
   "builder:set": builderStep("builder:set", ["build-dir", "selected"]),
   "builder-dockerfile:set": builderStep("builder-dockerfile:set", ["dockerfile-path"]),
   "resource:limit": resourceStep("resource:limit", resourceFlags),

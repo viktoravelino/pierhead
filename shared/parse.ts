@@ -10,8 +10,11 @@ import type {
   AppSummary,
   Build,
   BuilderSettings,
+  BuildRecord,
+  BuildStatus,
   DokkuHost,
   FormationEntry,
+  GitSettings,
   LogEvent,
   Network,
   NetworkAttachment,
@@ -180,6 +183,42 @@ function bool(entry: Record<string, unknown>, key: string, command: string) {
   return value;
 }
 
+const buildStatuses = [
+  "running",
+  "succeeded",
+  "failed",
+  "canceled",
+] as const satisfies readonly BuildStatus[];
+
+/**
+ * `builds:list <app> --format json`: `[{ id, kind, source, status, started_at,
+ * finished_at, exit_code, ... }]`, newest first, at most the app's retention (20).
+ * `finished_at` is `0001-01-01T00:00:00Z` while a build runs. Records of a kind this
+ * does not know are left out.
+ */
+export const parseBuilds = (stdout: string): BuildRecord[] =>
+  parseObjectList(stdout, "builds:list").flatMap((b) => {
+    const kind = b.kind === "build" || b.kind === "deploy" ? b.kind : null;
+    if (kind === null) return [];
+    const finished = typeof b.finished_at === "string" ? Date.parse(b.finished_at) : NaN;
+    const status = str(b, "status", "builds:list");
+    return [
+      {
+        id: str(b, "id", "builds:list"),
+        kind,
+        source: str(b, "source", "builds:list"),
+        status: buildStatuses.find((known) => known === status) ?? "other",
+        startedAt: str(b, "started_at", "builds:list"),
+        // Dokku writes year 1 for "not finished yet".
+        finishedAt:
+          Number.isNaN(finished) || new Date(finished).getUTCFullYear() < 2000
+            ? null
+            : new Date(finished).toISOString(),
+        exitCode: typeof b.exit_code === "number" ? b.exit_code : null,
+      },
+    ];
+  });
+
 /** `ps:scale <app> --format json`: `[{ process_type, quantity }]`. */
 export const parseFormation = (stdout: string): FormationEntry[] =>
   parseObjectList(stdout, "ps:scale").map((p) => {
@@ -228,6 +267,13 @@ export const parseBuilderSettings = (
   selected: builder.selected || null,
   buildDir: builder["build-dir"] || null,
   dockerfilePath: dockerfile["dockerfile-path"] || null,
+});
+
+/** `git:report`: what the app itself sets, the computed branch and the source image (empty means none). */
+export const parseGitSettings = (git: Report): GitSettings => ({
+  deployBranch: git["deploy-branch"] || null,
+  computedDeployBranch: git["computed-deploy-branch"] || null,
+  sourceImage: git["source-image"] || null,
 });
 
 const resourceKey = /^([^.]+)\.(limit|reserve)\.(memory|cpu)$/;
@@ -384,6 +430,7 @@ export function parseAppDetail(name: string, r: DetailReports): AppDetail {
     formation: parseFormation(r.scale),
     canScale: r.ps["can-scale"] !== "false",
     builder: parseBuilderSettings(r.builder, r.builderDockerfile),
+    git: parseGitSettings(r.git),
     resources: parseResources(r.resource),
     storage: parseStorage(r.storage),
   };

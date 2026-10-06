@@ -4,6 +4,7 @@ import {
   parseAliases,
   parseAppDetail,
   parseAppSummary,
+  parseBuilds,
   parseDomains,
   parseFormation,
   parseNetworkList,
@@ -11,7 +12,13 @@ import {
   parseStorage,
   type Report,
 } from "../shared/parse";
-import type { AppDetail, AppSummary, Network, StorageMount } from "../shared/types";
+import type {
+  AppDetail,
+  AppSummary,
+  BuildRecord,
+  Network,
+  StorageMount,
+} from "../shared/types";
 import type { Dokku, DokkuError, DokkuResult, DokkuRun } from "./dokku";
 
 export type Outcome<T> = { ok: true; value: T } | { ok: false; error: DokkuError };
@@ -146,6 +153,12 @@ export const listStorageUsers = (dokku: DokkuRun) =>
       })),
     );
   });
+
+/** One app's build and deploy records from Dokku's `builds` plugin (`builds:list`), newest first. */
+export const getBuilds = (dokku: DokkuRun, name: string) =>
+  outcome<BuildRecord[]>(async () =>
+    parseBuilds(stdoutOf(await dokku("builds:list", name))),
+  );
 
 /**
  * Which app serves each domain: `apps:list` and the all-apps `domains:report`, two SSH
