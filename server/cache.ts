@@ -65,6 +65,11 @@ export function createReadCache(ttlMs: number, now: () => number = Date.now) {
     invalidate(...keys: string[]) {
       for (const key of keys) entries.delete(key);
     },
+
+    /** Forgets everything, for a change that touches every read (the global settings). */
+    clear() {
+      entries.clear();
+    },
   };
 }
 

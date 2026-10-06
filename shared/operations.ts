@@ -65,9 +65,17 @@ type OperationArgs = {
   "apps:create": { app: string };
   /** `confirm` is the app's name, typed by the user; the server checks it too. */
   "apps:destroy": { app: string; confirm: string };
+  /** `confirm` is the app's current name. Redeploys under the new name unless `skipDeploy`. */
+  "apps:rename": { app: string; newName: string; skipDeploy: boolean; confirm: string };
+  /** Copies the app under `newName`; deploys the copy unless `skipDeploy`. */
+  "apps:clone": { app: string; newName: string; skipDeploy: boolean };
   "domains:add": { app: string; domains: string[] };
   "domains:remove": { app: string; domains: string[] };
   "domains:set": { app: string; domains: string[] };
+  /** The domains every new app's default vhost is built from; apps that exist keep theirs. */
+  "domains:add-global": { domains: string[] };
+  "domains:remove-global": { domains: string[] };
+  "domains:set-global": { domains: string[] };
   "ports:add": { app: string; mappings: PortMapping[] };
   "ports:remove": { app: string; mappings: PortMapping[] };
   "ports:set": { app: string; mappings: PortMapping[] };
@@ -96,6 +104,8 @@ type OperationArgs = {
   "git:sync": { app: string; url: string; ref: string; build: boolean };
   /** The branch Dokku deploys; an empty `branch` clears the app's own setting. */
   "git:set": { app: string; branch: string };
+  /** The deploy branch of apps that set none; an empty `branch` clears it. */
+  "git:set-global": { branch: string };
   /** An empty `value` clears the setting. */
   "builder:set": { app: string; property: BuilderProperty; value: string };
   /** `processType` null is the default for every type; an empty `memory` or `cpu` is left as it is. */
@@ -193,6 +203,17 @@ const appName = (body: unknown) => {
   return isAppName(app) ? app : refuse(`Invalid app name: ${JSON.stringify(app)}`);
 };
 
+/** The name of a rename or clone's result: a valid new name, and not the app itself. */
+const newNameOf = (body: unknown, app: string) => {
+  const newName = fields(body).string("newName");
+  if (!isNewAppName(newName)) {
+    return refuse(
+      "Use lowercase letters, digits, dots and hyphens, starting with a letter or digit, up to 63 characters.",
+    );
+  }
+  return newName === app ? refuse("Pick a different name.") : newName;
+};
+
 /** `{ app }` for the operation `op`. */
 const appBody = <K extends OperationId>(op: K) =>
   parseBody((body) => ({ op, app: appName(body) }));
@@ -218,6 +239,16 @@ const domainsBody = <K extends OperationId>(op: K, strict: boolean) =>
     app: appName(body),
     domains: domainList(body, "domains", strict),
   }));
+
+/** `{ domains }` without an app, for the global domains. */
+const globalDomainsBody = <K extends OperationId>(op: K, strict: boolean) =>
+  parseBody((body) => ({ op, domains: domainList(body, "domains", strict) }));
+
+/** A rename or clone redeploys a deployed app (~28 s) unless it only copies the state. */
+const redeploys = (
+  { skipDeploy }: { skipDeploy: boolean },
+  app: Pick<AppSummary, "status"> | null,
+) => !skipDeploy && app?.status.kind !== "not-deployed";
 
 const mappings = (body: unknown, key: string, strict: boolean) => {
   const list = fields(body).list(key, maxMappings, (value) => {
@@ -376,6 +407,43 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
     destructive: ({ app, confirm }) => ({ typed: confirm, expected: app }),
     availability: unlessDeploying(),
   },
+  "apps:rename": {
+    parse: parseBody((body) => {
+      const app = appName(body);
+      return {
+        op: "apps:rename",
+        app,
+        newName: newNameOf(body, app),
+        skipDeploy: fields(body).flag("skipDeploy"),
+        confirm: fields(body).string("confirm"),
+      };
+    }),
+    // Dokku destroys the old app and redeploys under the new name unless told not to.
+    commands: ({ app, newName, skipDeploy }) => [
+      step("apps:rename", ...(skipDeploy ? ["--skip-deploy"] : []), app, newName),
+    ],
+    streams: redeploys,
+    destructive: ({ app, confirm }) => ({ typed: confirm, expected: app }),
+    availability: unlessDeploying(),
+  },
+  "apps:clone": {
+    parse: parseBody((body) => {
+      const app = appName(body);
+      return {
+        op: "apps:clone",
+        app,
+        newName: newNameOf(body, app),
+        skipDeploy: fields(body).flag("skipDeploy"),
+      };
+    }),
+    // No --ignore-existing: the route 409s on a taken name, and the flag would turn a
+    // lost race into a silent exit 0.
+    commands: ({ app, newName, skipDeploy }) => [
+      step("apps:clone", ...(skipDeploy ? ["--skip-deploy"] : []), app, newName),
+    ],
+    streams: redeploys,
+    availability: unlessDeploying(),
+  },
   "domains:add": {
     parse: domainsBody("domains:add", true),
     commands: ({ app, domains }) => [step("domains:add", app, ...domains)],
@@ -393,6 +461,21 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
     commands: ({ app, domains }) => [step("domains:set", app, ...domains)],
     streams: false,
     availability: needsProxy,
+  },
+  "domains:add-global": {
+    parse: globalDomainsBody("domains:add-global", true),
+    commands: ({ domains }) => [step("domains:add-global", ...domains)],
+    streams: false,
+  },
+  "domains:remove-global": {
+    parse: globalDomainsBody("domains:remove-global", false),
+    commands: ({ domains }) => [step("domains:remove-global", ...domains)],
+    streams: false,
+  },
+  "domains:set-global": {
+    parse: globalDomainsBody("domains:set-global", true),
+    commands: ({ domains }) => [step("domains:set-global", ...domains)],
+    streams: false,
   },
   "ports:add": {
     parse: portsBody("ports:add", true),
@@ -594,6 +677,20 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
     streams: false,
     availability: unlessDeploying(),
   },
+  "git:set-global": {
+    parse: parseBody((body) => {
+      const branch = fields(body).string("branch");
+      return branch === "" || isGitRef(branch)
+        ? { op: "git:set-global", branch }
+        : refuse(
+            "A branch name: letters, digits, dots, underscores, hyphens and slashes, not starting with a hyphen.",
+          );
+    }),
+    commands: ({ branch }) => [
+      step("git:set", "--global", "deploy-branch", ...(branch === "" ? [] : [branch])),
+    ],
+    streams: false,
+  },
   "builder:set": {
     parse: parseBody((body) => {
       const f = fields(body);
@@ -748,11 +845,39 @@ export const commandLine = (req: OperationRequest) =>
     )
     .join("\n");
 
-/** The app a request acts on; null for the operations on a network, which belong to no app. */
-export const appOf = (req: OperationRequest) => ("app" in req ? req.app : null);
+/**
+ * The app a request acts on and the activity feed links to; null for the operations that
+ * belong to no single app: networks, the global settings, and rename and clone (their
+ * target names both apps, and a renamed app's old name is gone).
+ */
+export const appOf = (req: OperationRequest) =>
+  "app" in req && !("newName" in req) ? req.app : null;
 
-/** What the request is about, for toasts and the log: its app, else its network. */
-export const targetOf = (req: OperationRequest) => ("app" in req ? req.app : req.network);
+/**
+ * What the request is about, for toasts and the log: its app, a network, `old -> new` for
+ * a rename or clone, or what a global setting is set to (`default` for a cleared branch).
+ */
+export function targetOf(req: OperationRequest) {
+  if ("newName" in req) return `${req.app} -> ${req.newName}`;
+  if ("app" in req) return req.app;
+  if ("network" in req) return req.network;
+  if ("domains" in req) return req.domains.join(" ");
+  return req.branch || "default";
+}
+
+/** What a request changes in the server's read caches. */
+export type Invalidation =
+  | { kind: "apps"; apps: string[] }
+  | { kind: "networks" }
+  /** The host settings and every app, since defaults derive from them. */
+  | { kind: "host" };
+
+export function invalidationOf(req: OperationRequest): Invalidation {
+  if ("newName" in req) return { kind: "apps", apps: [req.app, req.newName] };
+  if ("app" in req) return { kind: "apps", apps: [req.app] };
+  if ("network" in req) return { kind: "networks" };
+  return { kind: "host" };
+}
 
 /** Whether the server answers with a stream; `app` is the target's state when known. */
 export function streamsOutput(

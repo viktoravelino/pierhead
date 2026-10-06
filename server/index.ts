@@ -14,6 +14,7 @@ import {
   commandSteps,
   conflictsOnNoOp,
   destructiveConfirm,
+  invalidationOf,
   isOperationId,
   type OperationOutputEvent,
   type OperationRequest,
@@ -56,6 +57,7 @@ import {
   preflight,
   restoreToSave,
   runSteps,
+  settleRename,
   streamSteps,
 } from "./operations";
 import { createStateStore, loadStateDir } from "./state";
@@ -113,6 +115,8 @@ type Attempt = {
   target: string;
   actor: string | null;
   startedAt: number;
+  /** Rename and clone: the name they make. */
+  newName?: string;
 };
 
 /**
@@ -122,7 +126,7 @@ type Attempt = {
  * carry a config value.
  */
 function logOperation(
-  { op, app, target, actor, startedAt }: Attempt,
+  { op, app, target, actor, startedAt, newName }: Attempt,
   outcome: OperationRecord["outcome"],
   reason = "",
   message = reason,
@@ -139,6 +143,7 @@ function logOperation(
     outcome,
     durationMs,
     message: message.slice(0, maxMessage),
+    ...(newName === undefined ? {} : { newName }),
   });
 }
 
@@ -158,11 +163,25 @@ const invalidateAppReads = (app: string) => {
   buildsCache.invalidate(cacheKeys.builds(app));
 };
 
-/** Drops what a request changed from the read cache: its app, or for a network operation the networks. */
+/**
+ * Drops what a request changed from the read cache: its apps (a rename touches two), the
+ * networks for a network operation, or for the global settings the host read and every
+ * app's, since their defaults derive from it.
+ */
 const invalidateFor = (req: OperationRequest) => {
-  const app = appOf(req);
-  if (app === null) invalidateNetworks(readCache);
-  else invalidateAppReads(app);
+  const change = invalidationOf(req);
+  switch (change.kind) {
+    case "apps":
+      for (const name of change.apps) invalidateAppReads(name);
+      return;
+    case "networks":
+      invalidateNetworks(readCache);
+      return;
+    case "host":
+      hostCache.invalidate(cacheKeys.host);
+      readCache.clear();
+      return;
+  }
 };
 
 /**
@@ -507,7 +526,14 @@ const app = new Hono()
     }
 
     const target = targetOf(req);
-    const attempt: Attempt = { op, app: appOf(req), target, actor, startedAt };
+    const attempt: Attempt = {
+      op,
+      app: appOf(req),
+      target,
+      actor,
+      startedAt,
+      ...("newName" in req ? { newName: req.newName } : {}),
+    };
     // Before any read of the host: a typo in the name costs nothing.
     const confirm = destructiveConfirm(req);
     if (confirm && confirm.typed !== confirm.expected) {
@@ -534,6 +560,7 @@ const app = new Hono()
     if (!streamsOutput(req, checked.app)) {
       const result = await runSteps(dokku, steps);
       invalidateFor(req);
+      await settleRename(dokku, state, req);
       if (!result.ok) {
         const known = failureRefusal(req, result.error);
         if (known) {
@@ -572,6 +599,7 @@ const app = new Hono()
       } finally {
         // A failed deploy can still have changed the app, so drop the cache either way.
         invalidateFor(req);
+        await settleRename(dokku, state, req).catch(() => {});
         clearInterval(heartbeat);
       }
       if (end.kind === "failed") logOperation(attempt, "failed", end.message);

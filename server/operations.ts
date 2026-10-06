@@ -9,6 +9,8 @@ import {
   isNotFound,
   listNetworks,
   noLock,
+  readGlobalDeployBranch,
+  readGlobalDomains,
 } from "./apps";
 import type { DokkuError, DokkuRun, DokkuSteps } from "./dokku";
 import type { StateStore } from "./state";
@@ -63,6 +65,29 @@ export async function preflight(
   }
 
   if (req.op === "apps:unlock") return unlockPreflight(dokku, req.app);
+
+  // No deploy lock to look at: these touch only Dokku's global settings, not an app.
+  if (
+    req.op === "domains:add-global" ||
+    req.op === "domains:remove-global" ||
+    req.op === "domains:set-global"
+  ) {
+    return globalDomainsPreflight(dokku, req);
+  }
+  if (req.op === "git:set-global") {
+    // Dokku exits 0 for setting what is already set.
+    const current = await readGlobalDeployBranch(dokku);
+    if (!current.ok) return { ok: false, refusal: failure(current.error) };
+    return current.value === req.branch
+      ? refused(
+          409,
+          "conflict",
+          req.branch === ""
+            ? "No global deploy branch is set."
+            : `The global deploy branch is already ${req.branch}.`,
+        )
+      : { ok: true, app: null };
+  }
 
   // Dokku's deploy lock is the only sign of a deploy in progress (no report shows one);
   // it also catches the rebuild or proxy toggle this server is streaming.
@@ -144,6 +169,9 @@ export async function preflight(
             `${req.app} has no set mapping ${formatPortMapping(missing)}.`,
           );
     }
+    case "apps:rename":
+    case "apps:clone":
+      return checkNewName(dokku, req, app);
     case "network:set":
       return checkNetworkSet(dokku, req, app);
     case "network:alias-add":
@@ -194,6 +222,59 @@ export async function preflight(
     case "proxy:enable":
     case "proxy:disable":
       return { ok: true, app };
+  }
+}
+
+/** The target of a rename or clone: a name no app has and no app serves as a domain. */
+async function checkNewName(
+  dokku: DokkuRun,
+  req: Extract<OperationRequest, { op: "apps:rename" | "apps:clone" }>,
+  app: AppDetail,
+): Promise<Preflight> {
+  const exists = await dokku("apps:exists", req.newName);
+  if (exists.ok) {
+    return refused(409, "exists", `An app named ${req.newName} already exists.`);
+  }
+  if (!isNotFound(exists.error)) return { ok: false, refusal: failure(exists.error) };
+  // A dotted name becomes the app's vhost as it is. A renamed app keeps its own domains
+  // (one may become the new name); a clone has none of them, so its owner counts.
+  const owners = await domainOwners(dokku);
+  if (!owners.ok) return { ok: false, refusal: failure(owners.error) };
+  const owner = owners.value.get(req.newName);
+  return owner === undefined || (req.op === "apps:rename" && owner === req.app)
+    ? { ok: true, app }
+    : refused(409, "domain-in-use", `${req.newName} is already a domain of ${owner}.`);
+}
+
+/**
+ * The global domain operations against the live list: Dokku exits 0 for adding what is
+ * there and removing what is not, so those become 409s like the per-app domain edits.
+ */
+async function globalDomainsPreflight(
+  dokku: DokkuRun,
+  req: Extract<
+    OperationRequest,
+    { op: "domains:add-global" | "domains:remove-global" | "domains:set-global" }
+  >,
+): Promise<Preflight> {
+  const current = await readGlobalDomains(dokku);
+  if (!current.ok) return { ok: false, refusal: failure(current.error) };
+  const held = new Set(current.value);
+  switch (req.op) {
+    case "domains:add-global":
+      return req.domains.every((d) => held.has(d))
+        ? refused(409, "conflict", "Every one of these is already a global domain.")
+        : { ok: true, app: null };
+    case "domains:remove-global": {
+      const missing = req.domains.find((d) => !held.has(d));
+      return missing === undefined
+        ? { ok: true, app: null }
+        : refused(409, "conflict", `${missing} is not a global domain.`);
+    }
+    case "domains:set-global":
+      return req.domains.length === held.size && req.domains.every((d) => held.has(d))
+        ? refused(409, "conflict", "The global domains are already exactly this list.")
+        : { ok: true, app: null };
   }
 }
 
@@ -330,7 +411,7 @@ export function restoreToSave(req: OperationRequest, app: AppDetail | null) {
  * disable cleared is kept in the state store, so a restart does not forget it.
  */
 export function afterSuccess(
-  store: Pick<StateStore, "saveRestore" | "clearRestore">,
+  store: Pick<StateStore, "saveRestore" | "clearRestore" | "restoreOf">,
   req: OperationRequest,
   saved: ProxyRestore | null,
 ) {
@@ -338,6 +419,11 @@ export function afterSuccess(
     case "proxy:disable":
       if (saved) store.saveRestore(req.app, saved);
       else store.clearRestore(req.app);
+      return;
+    // A rename is settled by `settleRename`, which also runs after a failed one.
+    // A clone is a new app, so it starts without an entry.
+    case "apps:clone":
+      store.clearRestore(req.newName);
       return;
     // A new app must not inherit a destroyed one's entry, and an enable consumes it.
     case "proxy:enable":
@@ -348,6 +434,38 @@ export function afterSuccess(
     default:
       return;
   }
+}
+
+/**
+ * After a rename's commands, whatever their outcome: Dokku creates the new app, destroys
+ * the old one and only then redeploys, so a failed redeploy still leaves the old app gone.
+ * Once it is, its saved proxy-restore entry goes to the new name, with the old default
+ * vhost (`<old>.<g>` for each global domain) swapped for the new one. While the old app
+ * still exists (it failed before anything happened) or the check fails, nothing moves.
+ */
+export async function settleRename(
+  dokku: DokkuRun,
+  store: Pick<StateStore, "saveRestore" | "clearRestore" | "restoreOf">,
+  req: OperationRequest,
+) {
+  if (req.op !== "apps:rename") return;
+  const old = await dokku("apps:exists", req.app);
+  if (old.ok || !isNotFound(old.error)) return;
+  const restore = store.restoreOf(req.app);
+  store.clearRestore(req.app);
+  store.clearRestore(req.newName);
+  if (!restore) return;
+  const globals = await readGlobalDomains(dokku);
+  const swaps = new Map(
+    (globals.ok ? globals.value : []).map((g) => [
+      `${req.app}.${g}`,
+      `${req.newName}.${g}`,
+    ]),
+  );
+  store.saveRestore(req.newName, {
+    ...restore,
+    domains: restore.domains.map((d) => swaps.get(d) ?? d),
+  });
 }
 
 /** Dokku's output with its ANSI colours stripped, blank lines dropped. */

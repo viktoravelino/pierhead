@@ -347,6 +347,7 @@ export const hostDetails: HostDetails = {
     scheduler: "docker-local",
     builder: { selected: null, buildDir: null },
     deployBranch: "master",
+    globalDeployBranch: null,
     plugins: [
       ...["apps", "builder-dockerfile", "builder-herokuish", "domains", "network"].map(
         corePlugin,

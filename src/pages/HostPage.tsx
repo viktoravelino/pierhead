@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
+import { X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { DokkuHost, PierheadConfig } from "../../shared/types";
 import { dataSource } from "../api/client";
 import { hostDetailsQuery } from "../api/queries";
+import { OperationButton, removeButton, textButton } from "../components/OperationButton";
 import { ErrorNote, Mono, PageHeader, Panel, Skeleton } from "../components/ui";
 
 type Row = readonly [label: string, value: ReactNode];
@@ -31,12 +33,89 @@ const metricsLabel = {
   "not-configured": "not configured",
 } as const satisfies Record<PierheadConfig["metrics"], string>;
 
+/** The global domains, each removable, with Add and a Replace-all that starts from the current list. */
+function GlobalDomains({ domains }: { domains: string[] }) {
+  return (
+    <div className="flex flex-col items-end gap-2">
+      {domains.length === 0 ? (
+        none
+      ) : (
+        <ul className="flex flex-col items-end">
+          {domains.map((domain) => (
+            <li key={domain} className="flex items-center gap-1">
+              <Mono>{domain}</Mono>
+              <OperationButton
+                request={{ op: "domains:remove-global", domains: [domain] }}
+                label={`Remove global domain ${domain}`}
+                className={removeButton}
+              >
+                <X className="size-4" aria-hidden="true" />
+              </OperationButton>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        <OperationButton
+          request={{ op: "domains:add-global", domains: [""] }}
+          label="Add global domain"
+          className={textButton}
+        >
+          Add
+        </OperationButton>
+        {domains.length > 0 && (
+          <OperationButton
+            request={{ op: "domains:set-global", domains }}
+            label="Replace the global domains"
+            className={textButton}
+          >
+            Replace all
+          </OperationButton>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The branch Dokku deploys from by default; Clear only while a global one is set. */
+function DeployBranch({ host }: { host: DokkuHost }) {
+  return (
+    <div className="flex flex-col items-end gap-2">
+      {host.deployBranch ? (
+        <span>
+          <Mono>{host.deployBranch}</Mono>
+          {!host.globalDeployBranch && (
+            <span className="text-dim"> (Dokku's default)</span>
+          )}
+        </span>
+      ) : (
+        none
+      )}
+      <div className="flex gap-2">
+        <OperationButton
+          request={{ op: "git:set-global", branch: host.globalDeployBranch ?? "" }}
+          label="Set the global deploy branch"
+          className={textButton}
+        >
+          Edit
+        </OperationButton>
+        {host.globalDeployBranch && (
+          <OperationButton
+            request={{ op: "git:set-global", branch: "" }}
+            label="Clear the global deploy branch"
+            className={textButton}
+          >
+            Clear
+          </OperationButton>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const dokkuRows = (d: DokkuHost): Row[] => [
   ["Dokku version", <Mono key="v">{d.version}</Mono>],
-  [
-    "Global domain",
-    d.globalDomains.length > 0 ? <Mono key="d">{d.globalDomains.join(", ")}</Mono> : none,
-  ],
+  ["Global domain", <GlobalDomains key="d" domains={d.globalDomains} />],
   ["Proxy", d.proxyType ? <Mono key="p">{d.proxyType}</Mono> : none],
   ["Scheduler", d.scheduler ? <Mono key="s">{d.scheduler}</Mono> : none],
   [
@@ -52,7 +131,7 @@ const dokkuRows = (d: DokkuHost): Row[] => [
       </span>
     ),
   ],
-  ["Deploy branch", d.deployBranch ? <Mono key="g">{d.deployBranch}</Mono> : none],
+  ["Deploy branch", <DeployBranch key="g" host={d} />],
 ];
 
 const pierheadRows = (p: PierheadConfig): Row[] => [
@@ -125,6 +204,14 @@ function SshKeys({ keys }: { keys: DokkuHost["sshKeys"] }) {
           ))}
         </ul>
       )}
+      <p className="border-t border-line px-4 py-3 text-pretty text-xs text-dim">
+        Pierhead only lists keys. Adding or removing one needs root on the Dokku host:
+        Dokku refuses <Mono>ssh-keys:add</Mono> and <Mono>ssh-keys:remove</Mono> for the{" "}
+        <Mono>dokku</Mono> user pierhead connects as, and giving pierhead a sudo rule for
+        them would widen what a leaked pierhead key can do. On the host, run{" "}
+        <Mono>sudo dokku ssh-keys:add &lt;name&gt; &lt;public-key-file&gt;</Mono> or{" "}
+        <Mono>sudo dokku ssh-keys:remove &lt;name&gt;</Mono>.
+      </p>
     </Panel>
   );
 }
@@ -135,7 +222,7 @@ export function HostPage() {
     <>
       <PageHeader
         title="Host"
-        subtitle="What Dokku reports about this host, and how pierhead is configured. Read-only."
+        subtitle="What Dokku reports about this host, and how pierhead is configured. The global domains and deploy branch can be edited."
       />
       {error ? (
         <Panel title="Host" className="max-w-3xl">

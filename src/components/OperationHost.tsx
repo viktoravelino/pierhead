@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { CircleCheck, CircleX, LoaderCircle, Plus, X } from "lucide-react";
 import {
   createContext,
@@ -32,7 +32,13 @@ import {
   operationUi,
   psOperationIds,
 } from "../api/operations";
-import { appsQuery, networksQuery, storageUsersQuery } from "../api/queries";
+import {
+  appsQuery,
+  hostDetailsQuery,
+  hostQuery,
+  networksQuery,
+  storageUsersQuery,
+} from "../api/queries";
 import {
   Checkbox,
   FormationList,
@@ -126,6 +132,8 @@ export function OperationHost({ children }: { children: ReactNode }) {
   const [lines, setLines] = useState<string[]>([]);
   // A failure shown in the form, so what was typed survives it.
   const [formError, setFormError] = useState<string | null>(null);
+  // After a failed rename or clone: the app it made, which Dokku creates before it deploys.
+  const [made, setMade] = useState<string | null>(null);
   const notify = useToast();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -151,6 +159,30 @@ export function OperationHost({ children }: { children: ReactNode }) {
                   "Read-only: the server was started without PIERHEAD_ALLOW_WRITES=true.",
               };
 
+  /**
+   * A rename or clone fails after the new app exists whenever its deploy fails, and a
+   * rename has already destroyed the old one: look the new name up, and for a rename move
+   * to it (the old page is gone), for a clone offer a link.
+   */
+  const checkMade = async (
+    req: Extract<OperationRequest, { op: "apps:rename" | "apps:clone" }>,
+    message: string,
+  ) => {
+    const apps = await queryClient
+      .fetchQuery({ ...appsQuery, staleTime: 0 })
+      .catch(() => null);
+    if (!apps?.some((a) => a.name === req.newName)) return;
+    setMade(req.newName);
+    if (req.op === "apps:rename") {
+      notify({
+        message: `Renamed ${req.app} to ${req.newName}, but the deploy failed.`,
+        detail: message,
+        tone: "error",
+      });
+      void navigate({ to: "/apps/$appName", params: { appName: req.newName } });
+    }
+  };
+
   const mutation = useMutation({
     mutationFn: (req: OperationRequest) =>
       runOperation(
@@ -172,12 +204,17 @@ export function OperationHost({ children }: { children: ReactNode }) {
       if (dataSource === "mock") return;
       if (req.op === "apps:create") {
         void navigate({ to: "/apps/$appName", params: { appName: req.app } });
+      } else if (req.op === "apps:rename" || req.op === "apps:clone") {
+        void navigate({ to: "/apps/$appName", params: { appName: req.newName } });
       } else if (req.op === "apps:destroy") {
         void navigate({ to: "/" });
       }
     },
     onError: (error, req) => {
       const { message } = describeError(error);
+      if (req.op === "apps:rename" || req.op === "apps:clone") {
+        void checkMade(req, message);
+      }
       // The ps buttons have no form to keep open, so they report in a toast.
       if (psOperationIds.some((id) => id === req.op)) {
         setOpened(null);
@@ -194,6 +231,9 @@ export function OperationHost({ children }: { children: ReactNode }) {
       if (dataSource === "mock") return;
       void queryClient.invalidateQueries({ queryKey: appsQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: networksQuery.queryKey });
+      // The global settings change what the Host page and every app show.
+      void queryClient.invalidateQueries({ queryKey: hostQuery.queryKey });
+      void queryClient.invalidateQueries({ queryKey: hostDetailsQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: storageUsersQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: backendHealthQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: ["activity"] });
@@ -204,6 +244,7 @@ export function OperationHost({ children }: { children: ReactNode }) {
   const confirm = (confirmed: OperationRequest) => {
     setLines([]);
     setFormError(null);
+    setMade(null);
     mutation.mutate(confirmed);
   };
 
@@ -276,6 +317,9 @@ export function OperationHost({ children }: { children: ReactNode }) {
               {lines.length > 0 ? lines.join("\n") : "Waiting for output..."}
             </pre>
             {failed && <p className="text-pretty text-crit">{failed}</p>}
+            {failed && made && (
+              <MadeNote op={panel.op} name={made} onGo={() => setPanel(null)} />
+            )}
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-faint">
                 {running ? "Closing this does not stop the operation." : ""}
@@ -298,12 +342,39 @@ export function OperationHost({ children }: { children: ReactNode }) {
             writes={writes}
             running={running}
             error={formError}
+            made={made}
             onSubmit={confirm}
             onCancel={() => setOpened(null)}
           />
         )}
       </dialog>
     </OperationContext>
+  );
+}
+
+/** What a failed rename or clone left: the new app exists, but its deploy failed. */
+function MadeNote({
+  op,
+  name,
+  onGo,
+}: {
+  op: OperationRequest["op"];
+  name: string;
+  onGo: () => void;
+}) {
+  return (
+    <p className="text-pretty text-sm text-dim">
+      The deploy failed, but {op === "apps:rename" ? "the app was renamed and " : ""}
+      <Link
+        to="/apps/$appName"
+        params={{ appName: name }}
+        onClick={onGo}
+        className="font-mono font-medium text-accent hover:underline"
+      >
+        {name}
+      </Link>{" "}
+      exists. It is not running; fix the cause, then rebuild it.
+    </p>
   );
 }
 
@@ -314,6 +385,7 @@ function OperationForm({
   writes,
   running,
   error,
+  made,
   onSubmit,
   onCancel,
 }: {
@@ -322,6 +394,7 @@ function OperationForm({
   writes: Writes;
   running: boolean;
   error: string | null;
+  made: string | null;
   onSubmit: (request: OperationRequest) => void;
   onCancel: () => void;
 }) {
@@ -401,6 +474,7 @@ function OperationForm({
           {error}
         </p>
       )}
+      {error && made && <MadeNote op={current.op} name={made} onGo={onCancel} />}
 
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} className={secondaryButton}>
@@ -449,6 +523,71 @@ function Fields({
           value={request.confirm}
           placeholder={request.app}
           onChange={(confirm) => onChange({ ...request, confirm })}
+        />
+      );
+    case "apps:rename":
+      return (
+        <>
+          <TextField
+            label={`New name for ${request.app}`}
+            value={request.newName}
+            placeholder="my-app"
+            hint="Lowercase letters, digits, dots and hyphens."
+            onChange={(newName) => onChange({ ...request, newName })}
+          />
+          <Checkbox
+            checked={request.skipDeploy}
+            onChange={(skipDeploy) => onChange({ ...request, skipDeploy })}
+          >
+            Skip the deploy. The app is only renamed and, if it was running, stays down
+            until you start it.
+          </Checkbox>
+          <TextField
+            label={`Type ${request.app} to confirm`}
+            value={request.confirm}
+            placeholder={request.app}
+            focus={false}
+            onChange={(confirm) => onChange({ ...request, confirm })}
+          />
+        </>
+      );
+    case "apps:clone":
+      return (
+        <>
+          <TextField
+            label={`Name of the copy of ${request.app}`}
+            value={request.newName}
+            placeholder="my-app-copy"
+            hint="Lowercase letters, digits, dots and hyphens."
+            onChange={(newName) => onChange({ ...request, newName })}
+          />
+          <Checkbox
+            checked={request.skipDeploy}
+            onChange={(skipDeploy) => onChange({ ...request, skipDeploy })}
+          >
+            Skip the deploy. The copy is created but runs nothing until you deploy it.
+          </Checkbox>
+        </>
+      );
+    case "domains:add-global":
+    case "domains:set-global":
+      return (
+        <StringList
+          label="Global domains"
+          values={request.domains}
+          placeholder="lab.example.com"
+          invalid={(value) => value !== "" && !isDomain(value)}
+          onChange={(domains) => onChange({ ...request, domains })}
+        />
+      );
+    case "git:set-global":
+      return (
+        <TextField
+          label="Global deploy branch"
+          value={request.branch}
+          placeholder="main"
+          hint="Empty goes back to Dokku's default, master."
+          onChange={(branch) => onChange({ ...request, branch })}
         />
       );
     case "domains:add":
@@ -739,6 +878,7 @@ function Fields({
     case "ps:restart":
     case "ps:rebuild":
     case "domains:remove":
+    case "domains:remove-global":
     case "ports:remove":
     case "proxy:disable":
     case "apps:unlock":

@@ -12,6 +12,7 @@ import {
   isMemory,
   isNetworkAlias,
   isNetworkName,
+  isNewAppName,
   isNewProcessType,
   isProcessCount,
   isProcessType,
@@ -348,8 +349,8 @@ const syncStep: StepBuilder = (args) => {
   ];
 };
 
-/** `git:set <app> deploy-branch [<branch>]`; no branch clears. */
-const gitSetStep: StepBuilder = ([app = "", property = "", ...values]) => {
+/** `git:set <app>|--global deploy-branch [<branch>]`; no branch clears. */
+const gitSetStep: StepBuilder = ([target = "", property = "", ...values]) => {
   if (property !== "deploy-branch" || values.length > 1) {
     throw new Error("Unexpected arguments for git:set");
   }
@@ -357,8 +358,34 @@ const gitSetStep: StepBuilder = ([app = "", property = "", ...values]) => {
   if (branch !== undefined && !isGitRef(branch)) {
     throw new Error(`Invalid branch: ${JSON.stringify(branch)}`);
   }
-  return ["git:set", appArg(app), property, ...values];
+  return [
+    "git:set",
+    target === "--global" ? target : appArg(target),
+    property,
+    ...values,
+  ];
 };
+
+/** `apps:rename|apps:clone [--skip-deploy] <app> <new-name>`; the new name on the new-app grammar. */
+const copyStep =
+  (name: string): StepBuilder =>
+  (args) => {
+    const skip = args[0] === "--skip-deploy";
+    const [app = "", newName = "", ...rest] = skip ? args.slice(1) : args;
+    if (rest.length > 0) throw new Error(`Unexpected arguments for ${name}`);
+    if (!isNewAppName(newName)) {
+      throw new Error(`Invalid app name: ${JSON.stringify(newName)}`);
+    }
+    return [name, ...(skip ? ["--skip-deploy"] : []), appArg(app), newName];
+  };
+
+/** `<command> <domain>...` for the global domains, at least one, each checked and quoted. */
+const globalDomainsStep =
+  (name: string): StepBuilder =>
+  (domains) => {
+    if (domains.length === 0) throw new Error(`${name} needs at least one domain`);
+    return [name, ...domains.map(domainArg)];
+  };
 
 /**
  * The writes behind `POST /api/operations/:op`, keyed by Dokku command. Each re-checks the
@@ -376,6 +403,12 @@ const operationSteps = {
   "apps:destroy": appStep("apps:destroy", ["--force"]),
   // Releases a deploy lock a failed deploy left behind; the route checks no build is running.
   "apps:unlock": appStep("apps:unlock"),
+  // Both redeploy a deployed app unless `--skip-deploy`; the route streams them then.
+  "apps:rename": copyStep("apps:rename"),
+  "apps:clone": copyStep("apps:clone"),
+  "domains:add-global": globalDomainsStep("domains:add-global"),
+  "domains:remove-global": globalDomainsStep("domains:remove-global"),
+  "domains:set-global": globalDomainsStep("domains:set-global"),
   "domains:add": listStep("domains:add", domainArg),
   "domains:remove": listStep("domains:remove", domainArg),
   "domains:set": listStep("domains:set", domainArg),
@@ -445,6 +478,9 @@ const commandTimeoutMs: Partial<Record<string, number>> = {
   "config:unset": 120_000,
   // Stops and removes every container and the image.
   "apps:destroy": 120_000,
+  // Without a deploy: the copy, and for a rename the old app's removal.
+  "apps:rename": 120_000,
+  "apps:clone": 120_000,
   // Redeploys a deployed app (~25s locally); the routes stream them, this is the quiet case.
   "proxy:enable": 120_000,
   "proxy:disable": 120_000,

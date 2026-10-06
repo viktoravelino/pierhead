@@ -21,6 +21,9 @@ const deploying: ReadonlySet<string> = new Set([
   "network:alias-remove",
   "git:from-image",
   "git:sync",
+  // The copy's record is the new app's (a rename's old app is gone).
+  "apps:rename",
+  "apps:clone",
 ]);
 
 /** How far a record's start may precede the operation's start (clock and SSH latency) or follow its end. */
@@ -34,9 +37,10 @@ const startsRecords = (op: OperationRecord) =>
     ? op.restart === true
     : deploying.has(op.op);
 
-/** Whether `record` began while `op` ran, on the same app, and `op` is one that deploys. */
+/** Whether `record` began while `op` ran, on the same app (the new one for a rename or clone), and `op` is one that deploys. */
 function caused(op: OperationRecord, app: string, record: BuildRecord) {
-  if (op.app !== app || op.outcome === "refused" || !startsRecords(op)) return false;
+  if ((op.newName ?? op.app) !== app || op.outcome === "refused" || !startsRecords(op))
+    return false;
   const started = startMs(record.startedAt);
   const opStart = startMs(op.at);
   return started >= opStart - slackMs && started <= opStart + op.durationMs + slackMs;

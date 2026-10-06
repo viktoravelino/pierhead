@@ -317,7 +317,21 @@ describe("parseDokkuHost", () => {
       scheduler: "docker-local",
       builder: { selected: null, buildDir: null },
       deployBranch: "master",
+      globalDeployBranch: null,
     });
+    expect(
+      parseDokkuHost({
+        version: "0.38.31",
+        ...hostGlobal,
+        git: {
+          ...hostGlobal.git,
+          "global-deploy-branch": "main",
+          "computed-deploy-branch": "main",
+        },
+        plugins: "[]",
+        sshKeys: "[]",
+      }),
+    ).toMatchObject({ deployBranch: "main", globalDeployBranch: "main" });
     expect(host.plugins).toContainEqual({
       name: "network",
       version: "0.38.31",

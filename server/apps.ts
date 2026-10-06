@@ -7,6 +7,7 @@ import {
   parseBuilds,
   parseDomains,
   parseFormation,
+  parseGlobalDomains,
   parseNetworkList,
   parseReport,
   parseStorage,
@@ -180,6 +181,19 @@ export const domainOwners = (dokku: DokkuRun) =>
         parseDomains(rows[i] ?? {}).domains.map((domain) => [domain, name] as const),
       ),
     );
+  });
+
+/** The global vhost domains, read live. */
+export const readGlobalDomains = (dokku: DokkuRun) =>
+  outcome(async () =>
+    parseGlobalDomains(parseReport(stdoutOf(await dokku("domains:report:global")))),
+  );
+
+/** The global deploy branch, read live; empty while unset. */
+export const readGlobalDeployBranch = (dokku: DokkuRun) =>
+  outcome(async () => {
+    const report = parseReport(stdoutOf(await dokku("git:report:global")));
+    return report["global-deploy-branch"] ?? "";
   });
 
 /** Dokku exits 20 with "App <name> does not exist" for an unknown app. */

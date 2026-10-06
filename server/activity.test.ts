@@ -50,6 +50,41 @@ describe("mergeActivity", () => {
     });
   });
 
+  test("a rename or clone claims the redeploy record of the app it made, not of the old name", () => {
+    for (const name of ["apps:rename", "apps:clone"]) {
+      const rename = op(0, {
+        op: name,
+        app: null,
+        target: "hello -> hello-2",
+        newName: "hello-2",
+      });
+      const rows = mergeActivity(
+        [rename],
+        [{ app: "hello-2", records: [build("b1", 3, { source: "git:from-image" })] }],
+        50,
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        kind: "operation",
+        newName: "hello-2",
+        builds: ["b1"],
+      });
+    }
+    // A record of the old name (a rename destroys it) or of an unrelated app is not theirs.
+    const clone = op(0, {
+      op: "apps:clone",
+      app: null,
+      target: "hello -> hello-2",
+      newName: "hello-2",
+    });
+    const other = mergeActivity(
+      [clone],
+      [{ app: "hello", records: [build("old", 3)] }],
+      50,
+    );
+    expect(other.map((r) => r.kind)).toEqual(["build", "operation"]);
+  });
+
   test("a restart's build and deploy records both go to it", () => {
     const rows = merge(
       [op(0, { op: "ps:restart" })],
