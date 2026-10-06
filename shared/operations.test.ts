@@ -6,11 +6,14 @@ import {
   destructiveConfirm,
   invalidationOf,
   isOperationId,
+  isServiceRequest,
   type OperationId,
   type OperationRequest,
   operationAvailability,
   operations,
   parseOperation,
+  type ServiceState,
+  serviceAvailability,
   streamsOutput,
   targetOf,
 } from "./operations";
@@ -205,6 +208,44 @@ const valid = {
     },
     argv: [["storage:unmount", app, "/var/lib/dokku/data/storage/my-data:/data"]],
   },
+  "service:create": {
+    req: {
+      op: "service:create",
+      type: "postgres",
+      name: "hello-db",
+      version: "16-alpine",
+    },
+    argv: [["postgres:create", "hello-db", "--image-version", "16-alpine"]],
+  },
+  "service:destroy": {
+    req: {
+      op: "service:destroy",
+      type: "redis",
+      name: "hello-cache",
+      confirm: "hello-cache",
+    },
+    argv: [["redis:destroy", "hello-cache", "--force"]],
+  },
+  "service:link": {
+    req: { op: "service:link", type: "postgres", name: "hello-db", app, restart: false },
+    argv: [["postgres:link", "hello-db", app, "--no-restart"]],
+  },
+  "service:unlink": {
+    req: { op: "service:unlink", type: "postgres", name: "hello-db", app, restart: true },
+    argv: [["postgres:unlink", "hello-db", app]],
+  },
+  "service:start": {
+    req: { op: "service:start", type: "redis", name: "hello-cache" },
+    argv: [["redis:start", "hello-cache"]],
+  },
+  "service:stop": {
+    req: { op: "service:stop", type: "redis", name: "hello-cache" },
+    argv: [["redis:stop", "hello-cache"]],
+  },
+  "service:restart": {
+    req: { op: "service:restart", type: "redis", name: "hello-cache" },
+    argv: [["redis:restart", "hello-cache"]],
+  },
 } as const satisfies {
   [K in OperationId]: {
     req: Extract<OperationRequest, { op: K }>;
@@ -271,6 +312,7 @@ describe("operations table", () => {
       "apps:rename",
       "network:destroy",
       "storage:unmount",
+      "service:destroy",
     ]);
     for (const id of ids) {
       expect(destructiveConfirm(valid[id].req) !== undefined).toBe(destructive.has(id));
@@ -944,5 +986,126 @@ describe("availability: settings", () => {
         operationAvailability(op, state({ kind: "deploying", step: "build" })).ok,
       ).toBe(false);
     }
+  });
+});
+
+describe("service operations", () => {
+  const base = { type: "postgres", name: "hello-db" };
+
+  test("a blank version builds no flag, and create always streams", () => {
+    const req = parseOperation("service:create", { ...base, version: "" });
+    expect(req).toEqual({ op: "service:create", ...base, version: "" });
+    if (typeof req === "string") throw new Error(req);
+    expect(commandSteps(req)).toEqual([["postgres:create", "hello-db"]]);
+    expect(streamsOutput(req, null)).toBe(true);
+    // The version may be left out of the body altogether.
+    expect(parseOperation("service:create", base)).toEqual(req);
+  });
+
+  test("the type, name and version are held to their grammars", () => {
+    const refused: [OperationId, Record<string, unknown>][] = [
+      ["service:create", { ...base, type: "Post gres" }],
+      ["service:create", { ...base, type: "p" }],
+      ["service:create", { ...base, type: "postgres:create" }],
+      ["service:create", { ...base, type: "-postgres" }],
+      ["service:create", { ...base, type: "a".repeat(22) }],
+      ["service:create", { ...base, name: "Hello_DB" }],
+      ["service:create", { ...base, name: "a" }],
+      ["service:create", { ...base, name: "-db" }],
+      ["service:create", { ...base, name: "db-" }],
+      ["service:create", { ...base, name: "x".repeat(41) }],
+      ["service:create", { ...base, version: "--force" }],
+      ["service:create", { ...base, version: "16 alpine" }],
+      ["service:create", { ...base, version: "16;ls" }],
+      ["service:destroy", { ...base, name: "-f", confirm: "-f" }],
+      ["service:destroy", { ...base, name: "a b", confirm: "a b" }],
+      ["service:destroy", { ...base }],
+      ["service:start", { ...base, name: "$(id)" }],
+      ["service:link", { ...base, app: "Bad App" }],
+      ["service:link", { ...base, app: "--force" }],
+      ["service:link", { ...base, restart: "yes", app }],
+    ];
+    for (const [op, body] of refused) {
+      expect(typeof parseOperation(op, body)).toBe("string");
+    }
+  });
+
+  test("a service that exists keeps whatever name Dokku allowed", () => {
+    for (const name of ["Bad_Name", "a", "db_1"]) {
+      expect(parseOperation("service:start", { ...base, name })).toMatchObject({ name });
+    }
+  });
+
+  test("destroy asks for the service's name", () => {
+    const req = valid["service:destroy"].req;
+    expect(destructiveConfirm(req)).toEqual({
+      typed: "hello-cache",
+      expected: "hello-cache",
+    });
+    expect(destructiveConfirm({ ...req, confirm: "oops" })).toEqual({
+      typed: "oops",
+      expected: "hello-cache",
+    });
+  });
+
+  test("link and unlink stream only when a running app is restarted", () => {
+    const link = valid["service:link"].req;
+    const running = { status: { kind: "running" } } as const;
+    const stopped = { status: { kind: "stopped" } } as const;
+    expect(streamsOutput({ ...link, restart: true }, running)).toBe(true);
+    expect(
+      streamsOutput(
+        { ...link, restart: true },
+        { status: { kind: "crashed", failing: [] } },
+      ),
+    ).toBe(true);
+    expect(streamsOutput({ ...link, restart: true }, stopped)).toBe(false);
+    expect(streamsOutput({ ...link, restart: true }, null)).toBe(false);
+    expect(streamsOutput({ ...link, restart: false }, running)).toBe(false);
+    expect(streamsOutput(valid["service:start"].req, running)).toBe(false);
+  });
+
+  test("a service is the target, a link names its app, and every one drops the services read", () => {
+    const link = valid["service:link"].req;
+    expect(targetOf(link)).toBe("hello-db");
+    expect(appOf(link)).toBe(app);
+    expect(invalidationOf(link)).toEqual({ kind: "services", apps: [app] });
+    const stop = valid["service:stop"].req;
+    expect(targetOf(stop)).toBe("hello-cache");
+    expect(appOf(stop)).toBeNull();
+    expect(invalidationOf(stop)).toEqual({ kind: "services", apps: [] });
+  });
+
+  test("isServiceRequest tells service requests from the rest", () => {
+    expect(isServiceRequest(valid["service:stop"].req)).toBe(true);
+    expect(isServiceRequest(valid["ps:stop"].req)).toBe(false);
+  });
+
+  test("the state of the service decides what can be done", () => {
+    const running: ServiceState = { status: "running", apps: [] };
+    const stopped: ServiceState = { status: "stopped", apps: [] };
+    const linked: ServiceState = { status: "running", apps: [app] };
+    const reason = (req: OperationRequest, service: ServiceState) =>
+      isServiceRequest(req) ? serviceAvailability(req, service) : null;
+    expect(reason(valid["service:start"].req, running)).toEqual({
+      ok: false,
+      reason: "Already running.",
+    });
+    expect(reason(valid["service:start"].req, stopped)).toEqual({ ok: true });
+    expect(reason(valid["service:stop"].req, stopped)).toEqual({
+      ok: false,
+      reason: "Already stopped.",
+    });
+    expect(reason(valid["service:restart"].req, stopped)).toMatchObject({ ok: false });
+    expect(reason(valid["service:restart"].req, running)).toEqual({ ok: true });
+    expect(reason(valid["service:destroy"].req, linked)).toEqual({
+      ok: false,
+      reason: `Still linked to ${app}. Unlink it there first.`,
+    });
+    expect(reason(valid["service:destroy"].req, running)).toEqual({ ok: true });
+    expect(reason(valid["service:link"].req, linked)).toMatchObject({ ok: false });
+    expect(reason(valid["service:link"].req, running)).toEqual({ ok: true });
+    expect(reason(valid["service:unlink"].req, running)).toMatchObject({ ok: false });
+    expect(reason(valid["service:unlink"].req, linked)).toEqual({ ok: true });
   });
 });
