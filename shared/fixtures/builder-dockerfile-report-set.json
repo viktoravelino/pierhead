@@ -1,0 +1,5 @@
+{
+  "computed-dockerfile-path": "docker/Dockerfile.prod",
+  "dockerfile-path": "docker/Dockerfile.prod",
+  "global-dockerfile-path": ""
+}

@@ -1,0 +1,8 @@
+{
+  "_default_.reserve.memory": "64m",
+  "resource-_default_.reserve.memory": "64m",
+  "resource-web.limit.cpu": "0.5",
+  "resource-web.limit.memory": "256m",
+  "web.limit.cpu": "0.5",
+  "web.limit.memory": "256m"
+}

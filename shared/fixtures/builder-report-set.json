@@ -1,0 +1,22 @@
+{
+  "build-dir": "backend",
+  "builder-build-dir": "backend",
+  "builder-computed-build-dir": "backend",
+  "builder-computed-selected": "dockerfile",
+  "builder-computed-skip-cleanup": "false",
+  "builder-detected": "",
+  "builder-global-build-dir": "",
+  "builder-global-selected": "",
+  "builder-global-skip-cleanup": "",
+  "builder-selected": "dockerfile",
+  "builder-skip-cleanup": "",
+  "computed-build-dir": "backend",
+  "computed-selected": "dockerfile",
+  "computed-skip-cleanup": "false",
+  "detected": "",
+  "global-build-dir": "",
+  "global-selected": "",
+  "global-skip-cleanup": "",
+  "selected": "dockerfile",
+  "skip-cleanup": ""
+}

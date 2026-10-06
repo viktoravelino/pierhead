@@ -1,7 +1,7 @@
 // Grammars for the free-form arguments of operations, shared by the server (which enforces
 // them before anything reaches argv) and the frontend (which validates forms). Dokku
 // itself accepts far more than these allow (`-h` as a domain, a domain another app serves).
-import type { PortMapping } from "./types";
+import type { FormationEntry, NetworkAttachment, PortMapping } from "./types";
 
 /**
  * Dokku's app-name grammar: lowercase alphanumerics, dots and hyphens, starting with an
@@ -89,3 +89,108 @@ export function reusedPort(mappings: readonly PortMapping[]) {
   }
   return null;
 }
+
+/** An existing process type (a Procfile entry): safe to pass on, never a flag. */
+export const isProcessType = (type: string) => /^[a-z0-9][a-z0-9_-]*$/i.test(type);
+
+/** A process type pierhead lets a user add to the formation: lowercase, as Procfiles write them. */
+export const isNewProcessType = (type: string) =>
+  /^[a-z0-9][a-z0-9_-]*$/.test(type) && type.length <= 63;
+
+/** The most containers of one process type the UI scales to. */
+export const maxProcessCount = 20;
+
+export const isProcessCount = (count: number) =>
+  Number.isInteger(count) && count >= 0 && count <= maxProcessCount;
+
+/** A name for a new Docker network, as `network:create` receives it. */
+export const isNetworkName = (name: string) => /^[a-z0-9][a-z0-9_.-]{0,62}$/.test(name);
+
+/** A network alias: one DNS label, as Docker resolves it. */
+export const isNetworkAlias = (alias: string) =>
+  domainLabel.test(alias) && alias.length <= 63;
+
+/** The builders the builder panel offers; `null` is Dokku's builder that does nothing. */
+export const builderNames = [
+  "dockerfile",
+  "herokuish",
+  "pack",
+  "nixpacks",
+  "railpack",
+  "lambda",
+  "null",
+] as const;
+
+/**
+ * A directory or file inside the repository: `/`-separated segments of letters, digits,
+ * dots, underscores and hyphens, none of them `.` or `..`; never absolute and never
+ * starting with `-`. For `build-dir` and `dockerfile-path`.
+ */
+export const isRepoPath = (path: string) =>
+  path.length <= 200 &&
+  /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(path) &&
+  !path.startsWith("-") &&
+  path.split("/").every((segment) => segment !== "." && segment !== "..");
+
+/** Bytes in one unit; Dokku reads a missing unit as megabytes. */
+const bytesPer = (unit: string) =>
+  unit === "b" ? 1 : unit === "k" ? 1024 : unit === "g" ? 1024 ** 3 : 1024 ** 2;
+
+/** Docker refuses a memory limit below 6 MiB. */
+const minMemoryBytes = 6 * 1024 ** 2;
+
+/** `256m`, `1g`, `512` (a bare number is megabytes), at least Docker's 6 MiB minimum. */
+export function isMemory(memory: string) {
+  const [, digits = "", unit = ""] = memory.match(/^([0-9]{1,9})([bkmg]?)$/) ?? [];
+  return digits !== "" && Number(digits) * bytesPer(unit) >= minMemoryBytes;
+}
+
+/** What `--process-type` takes for the settings that apply to every process type. */
+export const defaultProcessType = "_default_";
+
+/** CPUs as Docker takes them: a number with at most two decimals. */
+export const isCpu = (cpu: string) => /^[0-9]{1,3}(\.[0-9]{1,2})?$/.test(cpu);
+
+/** Where Dokku keeps named storage directories; pierhead only mounts directories under it. */
+export const storageRoot = "/var/lib/dokku/data/storage";
+
+/** A name for a new storage directory. */
+export const isStorageName = (name: string) => /^[a-z0-9][a-z0-9_-]{0,62}$/.test(name);
+
+/** The name of a directory that already exists under the storage root (Dokku allows dots). */
+export const isExistingStorageName = (name: string) =>
+  /^[a-z0-9][a-z0-9._-]{0,62}$/.test(name);
+
+export const storageHostPath = (name: string) => `${storageRoot}/${name}`;
+
+/** The name of the storage directory a host path is, or null for anything outside the root. */
+export function storageNameOf(hostPath: string) {
+  const name = hostPath.startsWith(`${storageRoot}/`)
+    ? hostPath.slice(storageRoot.length + 1)
+    : "";
+  return isExistingStorageName(name) ? name : null;
+}
+
+const hasDotDot = (path: string) => path.split("/").includes("..");
+
+/**
+ * A path inside the container for a new mount: absolute, `/`-separated segments of
+ * letters, digits, dots, underscores and hyphens, no `..`, no empty segment.
+ */
+export const isContainerPath = (path: string) =>
+  path.length <= 200 && /^(\/[A-Za-z0-9._-]+)+$/.test(path) && !hasDotDot(path);
+
+/** The same for a mount Dokku already holds: anything safe to pass on (no `:`, no `..`). */
+export const isSafeContainerPath = (path: string) =>
+  path.startsWith("/") && isSafeArg(path) && !path.includes(":") && !hasDotDot(path);
+
+/** The `network:set` properties through which an app joins a network. */
+export const networkAttachments = [
+  "initial-network",
+  "attach-post-create",
+  "attach-post-deploy",
+] as const satisfies readonly NetworkAttachment[];
+
+/** The `type=count` form `ps:scale` takes. */
+export const formatFormationEntry = ({ type, count }: FormationEntry) =>
+  `${type}=${count}`;

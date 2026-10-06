@@ -26,6 +26,7 @@ import type {
   LogEndEvent,
   LogEvent,
   Network,
+  StorageMount,
 } from "../../shared/types";
 import {
   ApiError,
@@ -38,6 +39,7 @@ import {
   fetchHostDetails,
   fetchHostMetrics,
   fetchNetworks,
+  fetchStorageUsers,
   postOperation,
   putConfigVar,
   streamLogs,
@@ -104,6 +106,21 @@ function toApp(raw: RawApp): AppView {
     ...parseDomains(raw.domains),
     ports: portsOf(raw.ports, false),
     networks: raw.networks,
+    // The mock has no settings to edit; these are what an app with none looks like.
+    attachments: {
+      "initial-network": [],
+      "attach-post-create": [],
+      "attach-post-deploy": raw.networks.map((n) => n.name),
+    },
+    aliases: raw.networks.flatMap((n) => (n.alias ? [n.alias] : [])),
+    formation: [...new Set(processes.map((p) => p.type))].map((type) => ({
+      type,
+      count: processes.filter((p) => p.type === type).length,
+    })),
+    canScale: true,
+    builder: { selected: null, buildDir: null, dockerfilePath: null },
+    resources: [],
+    storage: [],
     sample: { summary: raw.summary, lastDeploy },
   };
 }
@@ -210,6 +227,9 @@ const mockHostDetails = async () => {
 
 export const getNetworks: () => Promise<Network[]> =
   dataSource === "api" ? fetchNetworks : mockNetworks;
+/** Mounts per app, to warn when a storage directory is shared; the mock has none. */
+export const getStorageUsers: () => Promise<{ app: string; mounts: StorageMount[] }[]> =
+  dataSource === "api" ? fetchStorageUsers : async () => [];
 export const getHostDetails: () => Promise<HostDetails> =
   dataSource === "api" ? fetchHostDetails : mockHostDetails;
 

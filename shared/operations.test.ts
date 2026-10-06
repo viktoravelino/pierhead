@@ -58,6 +58,94 @@ const valid = {
     argv: [["proxy:enable", app]],
   },
   "proxy:disable": { req: { op: "proxy:disable", app }, argv: [["proxy:disable", app]] },
+  "ps:scale": {
+    req: {
+      op: "ps:scale",
+      app,
+      formation: [
+        { type: "web", count: 2 },
+        { type: "worker", count: 0 },
+      ],
+      skipDeploy: true,
+    },
+    argv: [["ps:scale", "--skip-deploy", app, "web=2", "worker=0"]],
+  },
+  "network:create": {
+    req: { op: "network:create", network: "my-net" },
+    argv: [["network:create", "my-net"]],
+  },
+  "network:destroy": {
+    req: { op: "network:destroy", network: "my-net", confirm: "my-net" },
+    argv: [["network:destroy", "--force", "my-net"]],
+  },
+  "network:set": {
+    req: {
+      op: "network:set",
+      app,
+      property: "attach-post-deploy",
+      networks: ["a-net", "b-net"],
+      rebuild: true,
+    },
+    argv: [
+      ["network:set", app, "attach-post-deploy", "a-net", "b-net"],
+      ["ps:rebuild", app],
+    ],
+  },
+  "network:alias-add": {
+    req: { op: "network:alias-add", app, alias: "api", rebuild: false },
+    argv: [["docker-options:add", app, "deploy", "--network-alias api"]],
+  },
+  "network:alias-remove": {
+    req: { op: "network:alias-remove", app, alias: "api", rebuild: false },
+    argv: [["docker-options:remove", app, "deploy", "--network-alias api"]],
+  },
+  "builder:set": {
+    req: { op: "builder:set", app, property: "build-dir", value: "backend" },
+    argv: [["builder:set", app, "build-dir", "backend"]],
+  },
+  "resource:set": {
+    req: {
+      op: "resource:set",
+      app,
+      kind: "limit",
+      processType: "web",
+      memory: "256m",
+      cpu: "0.5",
+    },
+    argv: [
+      [
+        "resource:limit",
+        "--process-type",
+        "web",
+        "--memory",
+        "256m",
+        "--cpu",
+        "0.5",
+        app,
+      ],
+    ],
+  },
+  "resource:clear": {
+    req: { op: "resource:clear", app, kind: "reserve", processType: null },
+    argv: [["resource:reserve-clear", "--process-type", "_default_", app]],
+  },
+  "storage:mount": {
+    req: { op: "storage:mount", app, name: "my-data", containerPath: "/data" },
+    argv: [
+      ["storage:create", "my-data"],
+      ["storage:mount", app, "/var/lib/dokku/data/storage/my-data:/data"],
+    ],
+  },
+  "storage:unmount": {
+    req: {
+      op: "storage:unmount",
+      app,
+      name: "my-data",
+      containerPath: "/data",
+      confirm: "/data",
+    },
+    argv: [["storage:unmount", app, "/var/lib/dokku/data/storage/my-data:/data"]],
+  },
 } as const satisfies {
   [K in OperationId]: {
     req: Extract<OperationRequest, { op: K }>;
@@ -73,7 +161,11 @@ describe("operations table", () => {
     for (const id of ids) {
       const { req, argv } = valid[id];
       expect(commandSteps(req)).toEqual(argv);
-      expect(commandLine(req)).toBe(argv.map((a) => `dokku ${a.join(" ")}`).join("\n"));
+      // Only an argument with a space (an alias option) is printed in quotes.
+      const printed = argv.map((a) =>
+        ["dokku", ...a.map((x) => (x.includes(" ") ? `"${x}"` : x))].join(" "),
+      );
+      expect(commandLine(req)).toBe(printed.join("\n"));
     }
   });
 
@@ -114,15 +206,79 @@ describe("operations table", () => {
     }
   });
 
-  test("only destroy is destructive, and it must be confirmed with the app's name", () => {
+  test("destroying an app or a network and unmounting storage are confirmed by typing the name", () => {
+    const destructive = new Set<OperationId>([
+      "apps:destroy",
+      "network:destroy",
+      "storage:unmount",
+    ]);
     for (const id of ids) {
-      expect(destructiveConfirm(valid[id].req) !== undefined).toBe(id === "apps:destroy");
+      expect(destructiveConfirm(valid[id].req) !== undefined).toBe(destructive.has(id));
     }
     expect(destructiveConfirm({ op: "apps:destroy", app, confirm: "oops" })).toEqual({
       typed: "oops",
       expected: app,
     });
+    expect(
+      destructiveConfirm({ op: "network:destroy", network: "my-net", confirm: "x" }),
+    ).toEqual({ typed: "x", expected: "my-net" });
+    expect(destructiveConfirm(valid["storage:unmount"].req)).toEqual({
+      typed: "/data",
+      expected: "/data",
+    });
     expect(parseOperation("apps:destroy", { app })).toMatch(/confirm/);
+    expect(parseOperation("network:destroy", { network: "my-net" })).toMatch(/confirm/);
+  });
+
+  test("a step whose argument has a space is printed in quotes", () => {
+    expect(commandLine(valid["network:alias-add"].req)).toBe(
+      `dokku docker-options:add ${app} deploy "--network-alias api"`,
+    );
+  });
+
+  test("scale streams unless only the formation is saved; settings stream when they rebuild", () => {
+    const running = { status: { kind: "running" } } as const;
+    const scale = valid["ps:scale"].req;
+    expect(streamsOutput(scale, running)).toBe(false);
+    expect(streamsOutput({ ...scale, skipDeploy: false }, running)).toBe(true);
+    expect(streamsOutput(valid["network:set"].req, running)).toBe(true);
+    expect(streamsOutput(valid["network:alias-add"].req, running)).toBe(false);
+    expect(streamsOutput(valid["storage:mount"].req, running)).toBe(false);
+  });
+
+  test("builder:set picks the plugin by property and clears with no value", () => {
+    const set = (property: "selected" | "dockerfile-path", value: string) =>
+      commandSteps({ op: "builder:set", app, property, value });
+    expect(set("dockerfile-path", "docker/Dockerfile.prod")).toEqual([
+      ["builder-dockerfile:set", app, "dockerfile-path", "docker/Dockerfile.prod"],
+    ]);
+    expect(set("selected", "")).toEqual([["builder:set", app, "selected"]]);
+  });
+
+  test("resources: one flag per value set, the process type first, and limit or reserve by kind", () => {
+    const set = (memory: string, cpu: string, processType: string | null) =>
+      commandSteps({
+        op: "resource:set",
+        app,
+        kind: "reserve",
+        processType,
+        memory,
+        cpu,
+      });
+    expect(set("64m", "", null)).toEqual([["resource:reserve", "--memory", "64m", app]]);
+    expect(set("", "1", "worker")).toEqual([
+      ["resource:reserve", "--process-type", "worker", "--cpu", "1", app],
+    ]);
+    expect(
+      commandSteps({ op: "resource:clear", app, kind: "limit", processType: "web" }),
+    ).toEqual([["resource:limit-clear", "--process-type", "web", app]]);
+    // Without a process type Dokku clears every type's setting, so the default is named.
+    expect(
+      commandSteps({ op: "resource:clear", app, kind: "limit", processType: null }),
+    ).toEqual([["resource:limit-clear", "--process-type", "_default_", app]]);
+    expect(
+      parseOperation("resource:clear", { app, kind: "limit", processType: "_default_" }),
+    ).toEqual({ op: "resource:clear", app, kind: "limit", processType: null });
   });
 
   test("rebuild streams; proxy toggles stream once deployed", () => {
@@ -210,6 +366,168 @@ describe("request validation", () => {
     refused("ports:set", body([{ scheme: "http", host: 80, container: 70000 }]));
     refused("ports:set", body([http80, { ...http80, container: 6000 }]));
     refused("proxy:enable", { app, ports: [{ scheme: "http", host: 80 }] });
+  });
+});
+
+describe("request validation: settings", () => {
+  const refused = (op: OperationId, body: unknown) =>
+    expect(typeof parseOperation(op, body)).toBe("string");
+  const accepted = (op: OperationId, body: unknown) =>
+    expect(typeof parseOperation(op, body)).toBe("object");
+
+  test("scale: process types, counts, duplicates and empty formations", () => {
+    const body = (formation: unknown) => ({ app, formation });
+    for (const type of ["We-b", "-w", "w b", "web;ls", "", "a".repeat(64)]) {
+      refused("ps:scale", body([{ type, count: 1 }]));
+    }
+    for (const count of [-1, 21, 99, 1.5, "2", Number.NaN]) {
+      refused("ps:scale", body([{ type: "web", count }]));
+    }
+    refused("ps:scale", body([]));
+    refused(
+      "ps:scale",
+      body([
+        { type: "web", count: 1 },
+        { type: "web", count: 2 },
+      ]),
+    );
+    refused("ps:scale", { ...body([{ type: "web", count: 1 }]), skipDeploy: "yes" });
+    accepted(
+      "ps:scale",
+      body([
+        { type: "web", count: 0 },
+        { type: "worker_2", count: 20 },
+      ]),
+    );
+  });
+
+  test("networks: names, aliases and the attach properties", () => {
+    for (const network of ["Bad", "a b", "-h", "a;b", "../x", "", "n".repeat(64)]) {
+      refused("network:create", { network });
+    }
+    accepted("network:create", { network: "my_net.v2" });
+    for (const alias of ["Api", "a.b", "-x", "a b", "a_b", "", "x".repeat(64)]) {
+      refused("network:alias-add", { app, alias });
+    }
+    accepted("network:alias-add", { app, alias: "api-2" });
+    // Removing takes what Dokku holds, as long as it is safe to pass on.
+    accepted("network:alias-remove", { app, alias: "Old.Alias" });
+    for (const alias of ["-x", "a b", "a;b", "$HOME"]) {
+      refused("network:alias-remove", { app, alias });
+    }
+    const set = (property: unknown, networks: unknown) => ({ app, property, networks });
+    refused("network:set", set("tld", ["a-net"]));
+    refused("network:set", set("initial-network", ["a-net", "b-net"]));
+    refused("network:set", set("attach-post-create", ["a-net", "a-net"]));
+    refused("network:set", set("attach-post-create", ["-h"]));
+    refused("network:set", set("attach-post-create", ["a b"]));
+    accepted("network:set", set("attach-post-create", []));
+    accepted("network:set", set("initial-network", ["a-net"]));
+  });
+
+  test("builder: paths stay inside the repository and builders come from the list", () => {
+    const set = (property: string, value: unknown) =>
+      parseOperation("builder:set", { app, property, value });
+    for (const value of [
+      "../x",
+      "a/../b",
+      "/etc",
+      "-h",
+      "a b",
+      "a//b",
+      "a/",
+      "./a",
+      "a;b",
+      "a/.",
+    ]) {
+      expect(typeof set("build-dir", value)).toBe("string");
+      expect(typeof set("dockerfile-path", value)).toBe("string");
+    }
+    for (const value of ["nope", "Dockerfile", "NixPacks"]) {
+      expect(typeof set("selected", value)).toBe("string");
+    }
+    expect(typeof set("skip-cleanup", "true")).toBe("string");
+    for (const value of ["backend", "apps/web.v2", "docker/Dockerfile.prod", ""]) {
+      expect(typeof set("build-dir", value)).toBe("object");
+    }
+    for (const value of [
+      "dockerfile",
+      "herokuish",
+      "pack",
+      "nixpacks",
+      "railpack",
+      "lambda",
+      "null",
+      "",
+    ]) {
+      expect(typeof set("selected", value)).toBe("object");
+    }
+  });
+
+  test("resources: Dokku's memory units, plain cpu numbers, at least one value", () => {
+    const set = (memory: string, cpu: string, extra: object = {}) =>
+      parseOperation("resource:set", { app, kind: "limit", memory, cpu, ...extra });
+    for (const memory of [
+      "lots",
+      "-1",
+      "256 m",
+      "256mb",
+      "1.5g",
+      "m",
+      "256M",
+      "1e3",
+      "5m",
+      "64k",
+      "0",
+    ]) {
+      expect(typeof set(memory, "")).toBe("string");
+    }
+    for (const cpu of ["-1", "abc", "1.234", ".5", "1,5", "0x1"]) {
+      expect(typeof set("", cpu)).toBe("string");
+    }
+    expect(set("", "")).toMatch(/memory or a cpu/);
+    expect(typeof set("256m", "0.5", { processType: "-x" })).toBe("string");
+    expect(typeof set("256m", "0.5", { processType: "we b" })).toBe("string");
+    expect(typeof set("256m", "0.5", { kind: "other" })).toBe("string");
+    for (const [memory, cpu] of [
+      ["256m", "0.5"],
+      ["512", ""],
+      ["", "2"],
+      ["1g", "1.25"],
+    ] as const) {
+      expect(typeof set(memory, cpu)).toBe("object");
+    }
+    expect(
+      typeof parseOperation("resource:clear", { app, kind: "limit", processType: "w w" }),
+    ).toBe("string");
+  });
+
+  test("storage: names stay under the root, container paths stay absolute and clean", () => {
+    const mount = (name: string, containerPath: string) =>
+      parseOperation("storage:mount", { app, name, containerPath });
+    for (const name of ["../etc", "/etc", "a/b", "UPPER", "a b", "-x", "a.b", ""]) {
+      expect(typeof mount(name, "/data")).toBe("string");
+    }
+    for (const path of [
+      "data",
+      "/etc/../x",
+      "/a b",
+      "/a//b",
+      "/a/",
+      "/",
+      "/a:ro",
+      "/a;b",
+    ]) {
+      expect(typeof mount("my-data", path)).toBe("string");
+    }
+    expect(typeof mount("my_data-2", "/var/lib/app.d/data")).toBe("object");
+    const unmount = (name: string, containerPath: string) =>
+      parseOperation("storage:unmount", { app, name, containerPath, confirm: "" });
+    expect(typeof unmount("../etc", "/data")).toBe("string");
+    expect(typeof unmount("/opt/x", "/data")).toBe("string");
+    expect(typeof unmount("old.dir", "/a/../b")).toBe("string");
+    expect(typeof unmount("old.dir", "/a:ro")).toBe("string");
+    expect(typeof unmount("old.dir", "/data")).toBe("object");
   });
 });
 
@@ -323,5 +641,50 @@ describe("availability", () => {
     expect(operationAvailability("proxy:enable", on).ok).toBe(false);
     expect(operationAvailability("proxy:enable", off).ok).toBe(true);
     expect(operationAvailability("proxy:disable", off).ok).toBe(false);
+  });
+});
+
+describe("availability: settings", () => {
+  const revision = { sha: "abc", updatedAt: null };
+  const state = (status: AppStatus, canScale?: boolean) => ({
+    status,
+    revision,
+    proxyEnabled: true,
+    canScale,
+  });
+
+  test("scale needs a deployed app Dokku will scale, and not a deploy under way", () => {
+    expect(operationAvailability("ps:scale", state({ kind: "running" })).ok).toBe(true);
+    expect(operationAvailability("ps:scale", state({ kind: "stopped" })).ok).toBe(true);
+    expect(operationAvailability("ps:scale", state({ kind: "running" }, false))).toEqual({
+      ok: false,
+      reason: "Dokku does not scale this app.",
+    });
+    expect(operationAvailability("ps:scale", state({ kind: "not-deployed" }))).toEqual({
+      ok: false,
+      reason: "Never deployed, so there is nothing to scale yet.",
+    });
+    expect(
+      operationAvailability("ps:scale", state({ kind: "deploying", step: "build" })).ok,
+    ).toBe(false);
+  });
+
+  test("settings apply to a never-deployed app, but not mid-deploy", () => {
+    const settings = [
+      "network:set",
+      "network:alias-add",
+      "network:alias-remove",
+      "builder:set",
+      "resource:set",
+      "resource:clear",
+      "storage:mount",
+      "storage:unmount",
+    ] as const;
+    for (const op of settings) {
+      expect(operationAvailability(op, state({ kind: "not-deployed" })).ok).toBe(true);
+      expect(
+        operationAvailability(op, state({ kind: "deploying", step: "build" })).ok,
+      ).toBe(false);
+    }
   });
 });

@@ -1,0 +1,11 @@
+{
+  "build": "--network-alias notme",
+  "build-list": ["--network-alias notme"],
+  "deploy": "--label a=b --network-alias pr2alias --network-alias second",
+  "deploy-list": ["--label a=b", "--network-alias pr2alias", "--network-alias second"],
+  "docker-options-build": "--network-alias notme",
+  "docker-options-deploy": "--label a=b --network-alias pr2alias --network-alias second",
+  "docker-options-run": "",
+  "run": "",
+  "run-list": []
+}

@@ -1,0 +1,17 @@
+[
+  {
+    "entry_name": "legacy-513f96ffa3",
+    "host_path": "/opt/host-elsewhere",
+    "container_path": "/other"
+  },
+  {
+    "entry_name": "legacy-e0b0e66f46",
+    "host_path": "/var/lib/dokku/data/storage/pr2-probe-data",
+    "container_path": "/cache"
+  },
+  {
+    "entry_name": "legacy-e0b0e66f46",
+    "host_path": "/var/lib/dokku/data/storage/pr2-probe-data",
+    "container_path": "/data"
+  }
+]

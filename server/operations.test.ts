@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import dockerOptions from "../shared/fixtures/docker-options-report.json";
 import multiDomain from "../shared/fixtures/multi-domain.json";
+import networkAttached from "../shared/fixtures/network-report-attached.json";
+import networkMulti from "../shared/fixtures/network-report-multi.json";
 import neverDeployed from "../shared/fixtures/never-deployed.json";
 import running from "../shared/fixtures/running.json";
 import stopped from "../shared/fixtures/stopped.json";
+import storageList from "../shared/fixtures/storage-list.json";
 import type { OperationRequest } from "../shared/operations";
 import type { DokkuError, DokkuResult, DokkuRun, DokkuSteps } from "./dokku";
 import {
   afterSuccess,
+  failureRefusal,
   preflight,
   proxyRestore,
   restoreToSave,
@@ -26,8 +31,35 @@ const fail = (message: string): DokkuResult => ({
   error: { kind: "command", message },
 });
 
-/** A host with these apps, as Dokku's reports would show them; `locked` apps hold a deploy lock. */
-function fakeHost(apps: Record<string, Reports>, locked: string[] = []): DokkuRun {
+/** What the detail reads besides the reports above, as the commands print it. */
+type Extras = { scale: string; storage: string; resource: Report; dockerOptions: string };
+
+const noExtras: Extras = {
+  scale: '[{"process_type":"web","quantity":1}]',
+  storage: "[]",
+  resource: {},
+  dockerOptions: '{"deploy-list":[]}',
+};
+
+type HostOptions = {
+  /** Apps holding a deploy lock. */
+  locked?: string[];
+  extras?: Record<string, Partial<Extras>>;
+};
+
+/** `network:list` entries: a Dokku-managed network or one Docker keeps for itself. */
+const dockerNetworks = [
+  { Name: "bridge", DokkuManaged: false },
+  { Name: "hello-net", DokkuManaged: true },
+  { Name: "pr2-probe-net", DokkuManaged: true },
+  { Name: "spare-net", DokkuManaged: true },
+].map((n) => ({ ...n, Driver: "bridge", Scope: "local", Internal: false }));
+
+/** A host with these apps, as Dokku's reports would show them. */
+function fakeHost(
+  apps: Record<string, Reports>,
+  { locked = [], extras = {} }: HostOptions = {},
+): DokkuRun {
   const names = Object.keys(apps);
   const reportOf = (plugin: keyof Reports, app: string | undefined) => {
     if (app === undefined) {
@@ -38,6 +70,7 @@ function fakeHost(apps: Record<string, Reports>, locked: string[] = []): DokkuRu
       ? ok(JSON.stringify(reports[plugin]))
       : fail(`App ${app} does not exist`);
   };
+  const extra = (app: string): Extras => ({ ...noExtras, ...extras[app] });
   return async (name, ...args) => {
     const app = args.length > 0 ? String(args[0]) : undefined;
     const known = app !== undefined && app in apps;
@@ -52,6 +85,25 @@ function fakeHost(apps: Record<string, Reports>, locked: string[] = []): DokkuRu
         return locked.includes(app)
           ? ok("Deploy lock exists")
           : fail("Deploy lock does not exist");
+      case "network:list":
+        return ok(JSON.stringify(dockerNetworks));
+      case "ps:scale":
+      case "storage:list":
+      case "docker-options:report":
+        if (!known) return fail(`App ${app} does not exist`);
+        return ok(
+          name === "ps:scale"
+            ? extra(app).scale
+            : name === "storage:list"
+              ? extra(app).storage
+              : extra(app).dockerOptions,
+        );
+      case "resource:report":
+        return known
+          ? ok(JSON.stringify(extra(app).resource))
+          : fail(`App ${app} does not exist`);
+      case "builder-dockerfile:report":
+        return known ? ok("{}") : fail(`App ${app} does not exist`);
       case "ps:report":
       case "domains:report":
       case "ports:report":
@@ -71,16 +123,38 @@ const withProxy = (reports: Reports, enabled: boolean): Reports => ({
   proxy: { ...reports.proxy, "proxy-enabled": String(enabled) },
 });
 
-const host = fakeHost({
-  hello: running,
-  "hello-multi": multiDomain,
-  "hello-stopped": stopped,
-  "hello-new": neverDeployed,
-  "hello-noproxy": {
-    ...withProxy(running, false),
-    domains: { ...running.domains, "app-vhosts": "hello-noproxy.dokku.localhost" },
+const host = fakeHost(
+  {
+    hello: running,
+    "hello-multi": multiDomain,
+    "hello-stopped": stopped,
+    "hello-new": neverDeployed,
+    "hello-noproxy": {
+      ...withProxy(running, false),
+      domains: { ...running.domains, "app-vhosts": "hello-noproxy.dokku.localhost" },
+    },
+    // Two networks in one setting (comma-joined by Dokku): pr2-probe-net and hello-net.
+    "hello-two-nets": {
+      ...running,
+      network: networkMulti,
+      domains: { ...running.domains, "app-vhosts": "hello-two-nets.dokku.localhost" },
+    },
+    // Attached to pr2-probe-net (initial, post-create) and hello-net (post-deploy).
+    "hello-attached": {
+      ...running,
+      network: networkAttached,
+      domains: { ...running.domains, "app-vhosts": "hello-attached.dokku.localhost" },
+    },
   },
-});
+  {
+    extras: {
+      hello: {
+        storage: JSON.stringify(storageList),
+        dockerOptions: JSON.stringify(dockerOptions),
+      },
+    },
+  },
+);
 
 const refusal = async (req: OperationRequest, h: DokkuRun = host) => {
   const result = await preflight(h, req);
@@ -131,7 +205,7 @@ describe("preflight: existing apps", () => {
 
   test("an app holding Dokku's deploy lock refuses everything with 409, before any other read", async () => {
     const calls: string[] = [];
-    const base = fakeHost({ hello: running }, ["hello"]);
+    const base = fakeHost({ hello: running }, { locked: ["hello"] });
     const spy: DokkuRun = async (name, ...args) => {
       calls.push(name);
       return base(name, ...args);
@@ -401,5 +475,263 @@ describe("running steps", () => {
     };
     expect(await streamSteps(refusing, steps, async () => {})).toEqual(boom);
     expect(ran).toEqual(["proxy:enable"]);
+  });
+});
+
+describe("preflight: networks", () => {
+  test("create refuses a name that exists", async () => {
+    expect(await refusal({ op: "network:create", network: "hello-net" })).toMatchObject({
+      status: 409,
+      kind: "exists",
+    });
+    expect(await preflight(host, { op: "network:create", network: "fresh-net" })).toEqual(
+      { ok: true, app: null },
+    );
+  });
+
+  test("destroy refuses a network any app's initial, post-create or post-deploy setting names", async () => {
+    // hello-attached: initial and post-create pr2-probe-net, post-deploy hello-net.
+    for (const network of ["pr2-probe-net", "hello-net"]) {
+      expect(
+        await refusal({ op: "network:destroy", network, confirm: network }),
+      ).toMatchObject({
+        status: 409,
+        kind: "in-use",
+        message: expect.stringContaining("hello-attached"),
+      });
+    }
+  });
+
+  test("destroy refuses a network that is one of several in an app's setting", async () => {
+    // hello-two-nets lists "pr2-probe-net,hello-net" for attach-post-create; both are in use.
+    const result = await refusal({
+      op: "network:destroy",
+      network: "hello-net",
+      confirm: "hello-net",
+    });
+    expect(result).toMatchObject({ status: 409, kind: "in-use" });
+    expect(result?.message).toContain("hello-two-nets");
+  });
+
+  test("set sees a network that shares a comma-joined setting", async () => {
+    expect(
+      await refusal({
+        op: "network:set",
+        app: "hello-two-nets",
+        property: "attach-post-deploy",
+        networks: ["hello-net"],
+        rebuild: false,
+      }),
+    ).toMatchObject({ kind: "conflict" });
+  });
+
+  test("destroy allows an unused Dokku network, and refuses a missing or foreign one", async () => {
+    const destroy = (network: string): OperationRequest => ({
+      op: "network:destroy",
+      network,
+      confirm: network,
+    });
+    expect(await refusal(destroy("spare-net"))).toBeNull();
+    expect(await refusal(destroy("nope"))).toMatchObject({
+      status: 404,
+      kind: "not-found",
+    });
+    expect(await refusal(destroy("bridge"))).toMatchObject({
+      status: 409,
+      kind: "unmanaged",
+    });
+  });
+
+  test("set refuses a network that does not exist, clearing needs none", async () => {
+    const set = (networks: string[]): OperationRequest => ({
+      op: "network:set",
+      app: "hello",
+      property: "initial-network",
+      networks,
+      rebuild: false,
+    });
+    expect(await refusal(set(["ghost-net"]))).toMatchObject({
+      status: 409,
+      kind: "unknown-network",
+    });
+    expect(await refusal(set(["spare-net"]))).toBeNull();
+    expect(await refusal(set([]))).toBeNull();
+  });
+
+  test("set refuses a network already attached through the other attach setting", async () => {
+    const set = (property: "attach-post-create" | "attach-post-deploy", net: string) =>
+      refusal({
+        op: "network:set",
+        app: "hello-attached",
+        property,
+        networks: [net],
+        rebuild: false,
+      });
+    // post-create holds pr2-probe-net and post-deploy holds hello-net.
+    expect(await set("attach-post-deploy", "pr2-probe-net")).toMatchObject({
+      kind: "conflict",
+    });
+    expect(await set("attach-post-create", "hello-net")).toMatchObject({
+      kind: "conflict",
+    });
+    expect(await set("attach-post-create", "spare-net")).toBeNull();
+  });
+
+  test("a rebuild is refused for an app that has no code to rebuild", async () => {
+    const req: OperationRequest = {
+      op: "network:set",
+      app: "hello-new",
+      property: "initial-network",
+      networks: ["spare-net"],
+      rebuild: true,
+    };
+    expect(await refusal(req)).toMatchObject({
+      status: 409,
+      kind: "unavailable",
+      message: expect.stringContaining("No code has been pushed"),
+    });
+    expect(await refusal({ ...req, rebuild: false })).toBeNull();
+  });
+
+  test("aliases: adding one the app has and removing one it lacks are 409s", async () => {
+    const alias = (op: "network:alias-add" | "network:alias-remove", name: string) =>
+      refusal({ op, app: "hello", alias: name, rebuild: false });
+    expect(await alias("network:alias-add", "pr2alias")).toMatchObject({
+      kind: "conflict",
+    });
+    expect(await alias("network:alias-add", "fresh")).toBeNull();
+    expect(await alias("network:alias-remove", "pr2alias")).toBeNull();
+    expect(await alias("network:alias-remove", "ghost")).toMatchObject({
+      kind: "conflict",
+    });
+  });
+});
+
+describe("preflight: scale and storage", () => {
+  test("scale needs a deployed app", async () => {
+    const scale = (app: string) =>
+      refusal({
+        op: "ps:scale",
+        app,
+        formation: [{ type: "web", count: 2 }],
+        skipDeploy: false,
+      });
+    expect(await scale("hello-new")).toMatchObject({ status: 409, kind: "unavailable" });
+    expect(await scale("hello")).toBeNull();
+  });
+
+  test("scale respects a ps report that says the app cannot be scaled", async () => {
+    const locked = fakeHost({
+      hello: { ...running, ps: { ...running.ps, "can-scale": "false" } },
+    });
+    expect(
+      await refusal(
+        {
+          op: "ps:scale",
+          app: "hello",
+          formation: [{ type: "web", count: 2 }],
+          skipDeploy: true,
+        },
+        locked,
+      ),
+    ).toMatchObject({ kind: "unavailable" });
+  });
+
+  test("a mount at a container path the app already uses is a 409", async () => {
+    const mount = (containerPath: string) =>
+      refusal({ op: "storage:mount", app: "hello", name: "pr2-data", containerPath });
+    expect(await mount("/data")).toMatchObject({ status: 409, kind: "conflict" });
+    expect(await mount("/fresh")).toBeNull();
+  });
+
+  test("unmount only touches a mount under the storage root, at the exact path", async () => {
+    const unmount = (name: string, containerPath: string) =>
+      refusal({
+        op: "storage:unmount",
+        app: "hello",
+        name,
+        containerPath,
+        confirm: containerPath,
+      });
+    expect(await unmount("pr2-probe-data", "/data")).toBeNull();
+    // Wrong path, wrong directory, and the mount outside the root (/opt/host-elsewhere:/other).
+    expect(await unmount("pr2-probe-data", "/nowhere")).toMatchObject({
+      kind: "conflict",
+    });
+    expect(await unmount("other-dir", "/data")).toMatchObject({ kind: "conflict" });
+    expect(await unmount("host-elsewhere", "/other")).toMatchObject({
+      kind: "conflict",
+    });
+  });
+});
+
+describe("when settings reads fail", () => {
+  const flaky = (failing: string): DokkuRun => {
+    const base = fakeHost({ hello: running });
+    return async (name, ...args) =>
+      name === failing
+        ? { ok: false, error: { kind: "command", message: "boom" } }
+        : base(name, ...args);
+  };
+
+  test("the detail still loads and names what is missing", async () => {
+    const result = await preflight(flaky("storage:list"), {
+      op: "ps:restart",
+      app: "hello",
+    });
+    expect(result.ok && result.app?.partial).toEqual(["storage"]);
+  });
+
+  test("a malformed settings answer is partial too, not a failed detail", async () => {
+    const base = fakeHost({ hello: running });
+    const garbled: DokkuRun = async (name, ...args) =>
+      name === "ps:scale"
+        ? { ok: true, stdout: "not json", stderr: "" }
+        : base(name, ...args);
+    const result = await preflight(garbled, { op: "ps:stop", app: "hello" });
+    expect(result.ok && result.app?.partial).toEqual(["formation"]);
+  });
+
+  test("start, stop and the like go ahead; operations that compare with the lost data do not", async () => {
+    const broken = flaky("storage:list");
+    expect(await refusal({ op: "ps:restart", app: "hello" }, broken)).toBeNull();
+    expect(
+      await refusal(
+        { op: "storage:mount", app: "hello", name: "data", containerPath: "/data" },
+        broken,
+      ),
+    ).toMatchObject({ status: 502, kind: "partial-read" });
+    expect(
+      await refusal(
+        { op: "network:alias-add", app: "hello", alias: "x", rebuild: false },
+        flaky("docker-options:report"),
+      ),
+    ).toMatchObject({ status: 502, kind: "partial-read" });
+  });
+
+  test("a required report failing still fails the read", async () => {
+    expect(
+      await refusal({ op: "ps:restart", app: "hello" }, flaky("ps:report")),
+    ).toMatchObject({ status: 502 });
+  });
+});
+
+describe("failureRefusal", () => {
+  const active: DokkuError = {
+    kind: "command",
+    message: "Unable to destroy network: network x has active endpoints (name:...)",
+  };
+
+  test("Docker's active-endpoints failure on a network destroy is a 409 in-use", () => {
+    const req: OperationRequest = { op: "network:destroy", network: "x", confirm: "x" };
+    expect(failureRefusal(req, active)).toMatchObject({ status: 409, kind: "in-use" });
+    expect(failureRefusal(req, active)?.message).toContain("rebuilt");
+  });
+
+  test("other failures, and other operations, are left alone", () => {
+    expect(
+      failureRefusal({ op: "network:destroy", network: "x", confirm: "x" }, boom),
+    ).toBeNull();
+    expect(failureRefusal({ op: "ps:stop", app: "hello" }, active)).toBeNull();
   });
 });

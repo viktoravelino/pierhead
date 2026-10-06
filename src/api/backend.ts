@@ -76,6 +76,13 @@ export async function fetchNetworks() {
   return body.networks;
 }
 
+export async function fetchStorageUsers() {
+  const res = await backend.api.storage.$get();
+  const body = await res.json();
+  if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
+  return body.apps;
+}
+
 export async function fetchHostDetails() {
   const res = await backend.api.host.$get();
   const body = await res.json();

@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { Plus } from "lucide-react";
 import type { Network } from "../../shared/types";
 import { networksQuery } from "../api/queries";
+import { OperationButton, textButton } from "../components/OperationButton";
 import {
   EmptyNote,
   ErrorNote,
@@ -11,6 +13,15 @@ import {
   Skeleton,
 } from "../components/ui";
 
+/** Why a network cannot be destroyed from here, if it cannot (the server checks again). */
+function keepReason(net: Network) {
+  if (!net.dokkuManaged) return "Not created through Dokku, so pierhead leaves it alone.";
+  if (net.members.length > 0) {
+    return `Still used by ${net.members.map((m) => m.app).join(", ")}. Detach it there first.`;
+  }
+  return undefined;
+}
+
 function NetworkPanel({ net }: { net: Network }) {
   const tags = [
     net.dokkuManaged ? "managed by Dokku" : null,
@@ -18,7 +29,19 @@ function NetworkPanel({ net }: { net: Network }) {
     `${net.scope} scope`,
   ].filter(Boolean);
   return (
-    <Panel title={net.driver}>
+    <Panel
+      title={net.driver}
+      action={
+        <OperationButton
+          request={{ op: "network:destroy", network: net.name, confirm: "" }}
+          disabledReason={keepReason(net)}
+          label={`Destroy ${net.name}`}
+          className={textButton}
+        >
+          Destroy
+        </OperationButton>
+      }
+    >
       <div className="flex flex-col gap-4 p-4">
         <div className="flex flex-col gap-0.5">
           <h2 className="break-all font-mono text-lg font-medium">{net.name}</h2>
@@ -58,6 +81,16 @@ export function NetworksPage() {
       <PageHeader
         title="Networks"
         subtitle="Docker networks on the host and the apps Dokku attaches to them. Apps that set no network use Docker's default bridge, which Dokku does not report."
+        actions={
+          <OperationButton
+            request={{ op: "network:create", network: "" }}
+            label="Create network"
+            className={`${textButton} flex items-center gap-1.5`}
+          >
+            <Plus className="size-3.5" aria-hidden="true" />
+            Create network
+          </OperationButton>
+        }
       />
       {error ? (
         <Panel title="Networks" className="max-w-3xl">

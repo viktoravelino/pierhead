@@ -1,30 +1,62 @@
 import { describe, expect, test } from "bun:test";
+import builderDockerfileSet from "./fixtures/builder-dockerfile-report-set.json";
+import builderSet from "./fixtures/builder-report-set.json";
+import dockerOptions from "./fixtures/docker-options-report.json";
 import hostGlobal from "./fixtures/host-global-reports.json";
 import logs from "./fixtures/logs.json";
 import multiDomain from "./fixtures/multi-domain.json";
+import networkAttached from "./fixtures/network-report-attached.json";
+import networkMulti from "./fixtures/network-report-multi.json";
 import neverDeployed from "./fixtures/never-deployed.json";
+import resourceReport from "./fixtures/resource-report.json";
 import running from "./fixtures/running.json";
 import stopped from "./fixtures/stopped.json";
+import storageList from "./fixtures/storage-list.json";
 import {
   buildNetworks,
   needsGitRev,
+  parseAliases,
   parseAppDetail,
   parseAppSummary,
+  parseAttachments,
+  parseBuilderSettings,
   parseDokkuHost,
+  parseFormation,
   parseLogEvent,
   parseNetworkList,
+  parseNetworks,
   parseReport,
+  parseResources,
   parseSshKeys,
+  parseStorage,
 } from "./parse";
 
 const fixtureText = (name: string) =>
   Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).text();
 
+/** `parseAppDetail` with the reads the app fixtures predate (an app with nothing set), overridable. */
+const detailOf = (
+  name: string,
+  reports: Parameters<typeof parseAppDetail>[1] extends infer R
+    ? Omit<R, "resource" | "builderDockerfile" | "scale" | "storage" | "dockerOptions">
+    : never,
+  more: Partial<Parameters<typeof parseAppDetail>[1]> = {},
+) =>
+  parseAppDetail(name, {
+    resource: {},
+    builderDockerfile: {},
+    scale: '[{"process_type":"web","quantity":1}]',
+    storage: "[]",
+    dockerOptions: '{"deploy-list":[]}',
+    ...reports,
+    ...more,
+  });
+
 // Fixtures are `dokku <plugin>:report <app> --format json` captured from Dokku 0.38.31.
 
 describe("parseAppDetail", () => {
   test("running app", () => {
-    const app = parseAppDetail("hello", running);
+    const app = detailOf("hello", running);
     expect(app.status).toEqual({ kind: "running" });
     expect(app.processes).toEqual([
       { name: "web.1", type: "web", state: "running", cid: "eb74d208655" },
@@ -45,7 +77,7 @@ describe("parseAppDetail", () => {
   });
 
   test("stopped app keeps its exited process and container id", () => {
-    const app = parseAppDetail("hello-stopped", stopped);
+    const app = detailOf("hello-stopped", stopped);
     expect(app.status).toEqual({ kind: "stopped" });
     expect(app.processes).toEqual([
       { name: "web.1", type: "web", state: "exited", cid: "c85d2cfbd51" },
@@ -53,7 +85,7 @@ describe("parseAppDetail", () => {
   });
 
   test("never-deployed app has no processes, ports, build or revision", () => {
-    const app = parseAppDetail("hello-new", neverDeployed);
+    const app = detailOf("hello-new", neverDeployed);
     expect(app.status).toEqual({ kind: "not-deployed" });
     expect(app.processes).toEqual([]);
     expect(app.ports).toEqual([]);
@@ -62,7 +94,7 @@ describe("parseAppDetail", () => {
   });
 
   test("multi-domain app with a custom port mapping", () => {
-    const app = parseAppDetail("hello-multi", multiDomain);
+    const app = detailOf("hello-multi", multiDomain);
     expect(app.domains).toEqual(["hello-multi.dokku.localhost", "multi.dokku.localhost"]);
     expect(app.ports).toEqual([
       { scheme: "http", host: 8081, container: 80, detected: false },
@@ -79,7 +111,7 @@ describe("parseAppDetail on a host that sets no explicit ports or git dir", () =
   };
 
   test("uses the detected port map and has no revision", () => {
-    const app = parseAppDetail("insta-down", bare);
+    const app = detailOf("insta-down", bare);
     expect(app.ports).toEqual([
       { scheme: "http", host: 8000, container: 8000, detected: true },
     ]);
@@ -87,7 +119,7 @@ describe("parseAppDetail on a host that sets no explicit ports or git dir", () =
   });
 
   test("shows no ports without a proxy", () => {
-    const app = parseAppDetail("insta-down-api", {
+    const app = detailOf("insta-down-api", {
       ...bare,
       proxy: { ...running.proxy, "proxy-enabled": "false" },
     });
@@ -95,7 +127,7 @@ describe("parseAppDetail on a host that sets no explicit ports or git dir", () =
   });
 
   test("ignores the detected map of a never-deployed app", () => {
-    expect(parseAppDetail("hello-new", neverDeployed).ports).toEqual([]);
+    expect(detailOf("hello-new", neverDeployed).ports).toEqual([]);
   });
 });
 
@@ -111,7 +143,7 @@ describe("revision from GIT_REV", () => {
       sha: gitRev,
       updatedAt: "2026-10-05T22:04:58.000Z",
     });
-    expect(parseAppDetail("pushed", { ...reports, gitRev }).revision?.sha).toBe(gitRev);
+    expect(detailOf("pushed", { ...reports, gitRev }).revision?.sha).toBe(gitRev);
   });
 
   test("a trailing newline is ignored, anything but a sha is not a revision", () => {
@@ -293,5 +325,148 @@ describe("parseDokkuHost", () => {
     const [key] = parseSshKeys(await fixtureText("ssh-keys.json"));
     expect(Object.keys(key ?? {})).toEqual(["name", "fingerprint"]);
     expect(parseSshKeys("")).toEqual([]);
+  });
+});
+
+// Captured from Dokku 0.38.31 on an app with each setting made (and an `/opt` mount, a
+// build-phase alias and an unrelated deploy option as noise).
+describe("settings reads", () => {
+  test("ps:scale lists every process type with its count, zero included", async () => {
+    expect(parseFormation(await fixtureText("ps-scale.json"))).toEqual([
+      { type: "web", count: 1 },
+    ]);
+    expect(
+      parseFormation(
+        '[{"process_type":"web","quantity":2},{"process_type":"worker","quantity":0}]',
+      ),
+    ).toEqual([
+      { type: "web", count: 2 },
+      { type: "worker", count: 0 },
+    ]);
+    expect(() => parseFormation('[{"process_type":"web","quantity":"2"}]')).toThrow();
+  });
+
+  test("storage:list names only the directories under the storage root", () => {
+    expect(parseStorage(JSON.stringify(storageList))).toEqual([
+      { hostPath: "/opt/host-elsewhere", containerPath: "/other", name: null },
+      {
+        hostPath: "/var/lib/dokku/data/storage/pr2-probe-data",
+        containerPath: "/cache",
+        name: "pr2-probe-data",
+      },
+      {
+        hostPath: "/var/lib/dokku/data/storage/pr2-probe-data",
+        containerPath: "/data",
+        name: "pr2-probe-data",
+      },
+    ]);
+    expect(parseStorage("[]")).toEqual([]);
+    expect(
+      parseStorage(
+        '[{"entry_name":"x","host_path":"/var/lib/dokku/data/storage/../etc","container_path":"/d"}]',
+      )[0]?.name,
+    ).toBeNull();
+  });
+
+  test("docker-options:report yields the deploy phase's network aliases only", () => {
+    expect(parseAliases(JSON.stringify(dockerOptions))).toEqual(["pr2alias", "second"]);
+    expect(parseAliases('{"deploy-list":[]}')).toEqual([]);
+    expect(() => parseAliases('{"deploy":"--label a=b"}')).toThrow();
+  });
+
+  test("resource:report groups limits and reservations by process type, default first", () => {
+    expect(parseResources(resourceReport)).toEqual([
+      {
+        processType: null,
+        limit: { memory: null, cpu: null },
+        reserve: { memory: "64m", cpu: null },
+      },
+      {
+        processType: "web",
+        limit: { memory: "256m", cpu: "0.5" },
+        reserve: { memory: null, cpu: null },
+      },
+    ]);
+    expect(parseResources({})).toEqual([]);
+  });
+
+  test("builder reports give what the app itself sets, not the computed values", () => {
+    expect(parseBuilderSettings(builderSet, builderDockerfileSet)).toEqual({
+      selected: "dockerfile",
+      buildDir: "backend",
+      dockerfilePath: "docker/Dockerfile.prod",
+    });
+    expect(parseBuilderSettings(running.builder, {})).toEqual({
+      selected: null,
+      buildDir: null,
+      dockerfilePath: null,
+    });
+  });
+
+  test("network:report gives each attachment's own networks", () => {
+    expect(parseAttachments(networkAttached)).toEqual({
+      "initial-network": ["pr2-probe-net"],
+      "attach-post-create": ["pr2-probe-net"],
+      "attach-post-deploy": ["hello-net"],
+    });
+    expect(parseAttachments(running.network)).toEqual({
+      "initial-network": [],
+      "attach-post-create": [],
+      "attach-post-deploy": [],
+    });
+  });
+
+  // Dokku joins several networks with commas: `pr2-probe-net,hello-net`.
+  test("network:report values with several networks split on commas", () => {
+    expect(networkMulti["attach-post-create"]).toBe("pr2-probe-net,hello-net");
+    expect(parseAttachments(networkMulti)).toEqual({
+      "initial-network": ["pr2-probe-net"],
+      "attach-post-create": ["pr2-probe-net", "hello-net"],
+      "attach-post-deploy": [],
+    });
+    expect(parseNetworks(networkMulti).map((n) => n.name)).toEqual([
+      "pr2-probe-net",
+      "hello-net",
+    ]);
+  });
+
+  test("an app on two networks is a member of both, so neither looks unused", () => {
+    const info = (name: string) => ({
+      name,
+      driver: "bridge",
+      scope: "local",
+      dokkuManaged: true,
+      internal: false,
+    });
+    const built = buildNetworks(
+      [info("hello-net"), info("pr2-probe-net"), info("spare-net")],
+      [{ name: "probe", report: networkMulti }],
+    );
+    const members = (n: string) => built.find((b) => b.name === n)?.members;
+    expect(members("hello-net")).toEqual([{ app: "probe", via: ["attach-post-create"] }]);
+    expect(members("pr2-probe-net")).toEqual([
+      { app: "probe", via: ["initial-network", "attach-post-create"] },
+    ]);
+    expect(members("spare-net")).toEqual([]);
+  });
+
+  test("the detail carries them, and can-scale false is read as false", () => {
+    const app = detailOf("hello", running, {
+      scale: '[{"process_type":"web","quantity":2}]',
+      storage: JSON.stringify(storageList),
+      dockerOptions: JSON.stringify(dockerOptions),
+      resource: resourceReport,
+      network: networkAttached,
+    });
+    expect(app.formation).toEqual([{ type: "web", count: 2 }]);
+    expect(app.storage).toHaveLength(3);
+    expect(app.aliases).toEqual(["pr2alias", "second"]);
+    expect(app.resources).toHaveLength(2);
+    expect(app.attachments["attach-post-deploy"]).toEqual(["hello-net"]);
+    expect(app.canScale).toBe(true);
+    expect(
+      detailOf("hello", { ...running, ps: { ...running.ps, "can-scale": "false" } })
+        .canScale,
+    ).toBe(false);
   });
 });

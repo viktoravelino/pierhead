@@ -1,5 +1,27 @@
 import { configValueProblem, isConfigKey } from "../shared/config";
-import { isAppName, isSafeDomain, parsePortMapping } from "../shared/grammar";
+import {
+  builderNames,
+  defaultProcessType,
+  isAppName,
+  isContainerPath,
+  isCpu,
+  isExistingStorageName,
+  isMemory,
+  isNetworkAlias,
+  isNetworkName,
+  isNewProcessType,
+  isProcessCount,
+  isProcessType,
+  isRepoPath,
+  isSafeArg,
+  isSafeContainerPath,
+  isSafeDomain,
+  isStorageName,
+  networkAttachments,
+  parsePortMapping,
+  storageRoot,
+} from "../shared/grammar";
+import { createLimiter } from "./limit";
 
 /** Throws on anything that is not a valid app name; sshd joins argv with spaces. */
 function appArg(app: string) {
@@ -19,9 +41,6 @@ function keyArg(key: string) {
  * its quotes eaten. Single quotes keep everything literal except `'` itself.
  */
 export const shellQuote = (arg: string) => `'${arg.replaceAll("'", `'\\''`)}'`;
-
-/** Procfile process types (`web`, `worker`); must not start with `-` so it can't pass as a flag. */
-export const isProcessType = (type: string) => /^[a-z0-9][a-z0-9_-]*$/i.test(type);
 
 /** Bounds for `logs` history; the route defaults and clamps its query to these. */
 export const logTail = { default: 100, max: 1000 } as const;
@@ -61,11 +80,16 @@ const commands = {
   "proxy:report": report("proxy"),
   "builder:report": report("builder"),
   "git:report": report("git"),
+  "resource:report": report("resource"),
+  "builder-dockerfile:report": report("builder-dockerfile"),
+  "docker-options:report": report("docker-options"),
   "domains:report:global": globalReport("domains"),
   "proxy:report:global": globalReport("proxy"),
   "scheduler:report:global": globalReport("scheduler"),
   "builder:report:global": globalReport("builder"),
   "git:report:global": globalReport("git"),
+  "ps:scale": (app: string) => ["ps:scale", appArg(app), "--format", "json"],
+  "storage:list": (app: string) => ["storage:list", appArg(app), "--format", "json"],
   // Docker networks on the host, and the registered SSH keys and plugins.
   "network:list": () => ["network:list", "--format", "json"],
   "plugin:list": () => ["plugin:list", "--format", "json"],
@@ -153,6 +177,139 @@ function portArg(mapping: string) {
   return mapping;
 }
 
+/** `--network-alias <alias>` as `docker-options` takes it; one argument with a space, so it is quoted. */
+function aliasOption(option: string, strict: boolean) {
+  const alias = option.startsWith("--network-alias ") ? option.slice(16) : "";
+  if (strict ? !isNetworkAlias(alias) : !isSafeArg(alias)) {
+    throw new Error(`Invalid network alias option: ${JSON.stringify(option)}`);
+  }
+  return shellQuote(option);
+}
+
+/** `docker-options:<add|remove> <app> deploy "--network-alias <alias>"`: nothing else may be set through it. */
+const aliasStep =
+  (name: string, strict: boolean): StepBuilder =>
+  ([app = "", phase, option = "", ...rest]) => {
+    if (phase !== "deploy" || rest.length > 0) {
+      throw new Error(`Unexpected arguments for ${name}`);
+    }
+    return [name, appArg(app), phase, aliasOption(option, strict)];
+  };
+
+/** `<command> [flags] <value>`: exactly the fixed flags, then one value checked by `valid`. */
+const valueStep =
+  (
+    name: string,
+    flags: string[],
+    valid: (value: string) => boolean,
+    what: string,
+  ): StepBuilder =>
+  (args) => {
+    const [value = "", ...rest] = args.slice(flags.length);
+    if (args.slice(0, flags.length).join(" ") !== flags.join(" ") || rest.length > 0) {
+      throw new Error(`Unexpected arguments for ${name}`);
+    }
+    if (!valid(value)) throw new Error(`Invalid ${what}: ${JSON.stringify(value)}`);
+    return [name, ...flags, value];
+  };
+
+/** `ps:scale [--skip-deploy] <app> <type>=<count>...`, each entry on the process-type and count grammar. */
+const scaleStep: StepBuilder = (args) => {
+  const skip = args[0] === "--skip-deploy";
+  const [app = "", ...entries] = skip ? args.slice(1) : args;
+  if (entries.length === 0) throw new Error("ps:scale needs at least one entry");
+  return [
+    "ps:scale",
+    ...(skip ? ["--skip-deploy"] : []),
+    appArg(app),
+    ...entries.map((entry) => {
+      const [type = "", count = "", ...extra] = entry.split("=");
+      if (extra.length > 0 || !isNewProcessType(type) || !/^\d+$/.test(count)) {
+        throw new Error(`Invalid process count: ${JSON.stringify(entry)}`);
+      }
+      if (!isProcessCount(Number(count))) throw new Error(`Invalid count in ${entry}`);
+      return entry;
+    }),
+  ];
+};
+
+/** `network:set <app> <property> [<network>...]`: the three attach properties, networks safe to pass on. */
+const networkSetStep: StepBuilder = ([app = "", property = "", ...networks]) => {
+  if (!networkAttachments.some((p) => p === property)) {
+    throw new Error(`Invalid network property: ${JSON.stringify(property)}`);
+  }
+  for (const network of networks) {
+    if (!isSafeArg(network))
+      throw new Error(`Invalid network: ${JSON.stringify(network)}`);
+  }
+  return ["network:set", appArg(app), property, ...networks];
+};
+
+/** `builder:set <app> build-dir|selected [<value>]`; no value clears. */
+const builderStep =
+  (name: string, properties: readonly string[]): StepBuilder =>
+  ([app = "", property = "", ...values]) => {
+    if (!properties.includes(property) || values.length > 1) {
+      throw new Error(`Unexpected arguments for ${name}`);
+    }
+    const [value] = values;
+    const valid =
+      value === undefined ||
+      (property === "selected"
+        ? builderNames.some((n) => n === value)
+        : isRepoPath(value));
+    if (!valid) throw new Error(`Invalid ${property}: ${JSON.stringify(value)}`);
+    return [name, appArg(app), property, ...values];
+  };
+
+/**
+ * `resource:<limit|reserve>[-clear] [--process-type <t>] [--memory <m>] [--cpu <c>] <app>`:
+ * the flags in that order, each at most once, the last argument the app.
+ */
+const resourceStep =
+  (name: string, flags: Record<string, (value: string) => boolean>): StepBuilder =>
+  (args) => {
+    const rest = [...args];
+    const argv = [name];
+    for (const [flag, valid] of Object.entries(flags)) {
+      if (rest[0] !== flag) continue;
+      const [, value = ""] = rest.splice(0, 2);
+      if (!valid(value)) throw new Error(`Invalid ${flag}: ${JSON.stringify(value)}`);
+      argv.push(flag, value);
+    }
+    const [app, ...extra] = rest;
+    if (extra.length > 0) throw new Error(`Unexpected arguments for ${name}`);
+    return [...argv, appArg(app ?? "")];
+  };
+
+/** A process type, or `_default_` for the setting that applies to every type. */
+const isResourceProcessType = (type: string) =>
+  type === defaultProcessType || isProcessType(type);
+
+const resourceFlags = {
+  "--process-type": isResourceProcessType,
+  "--memory": isMemory,
+  "--cpu": isCpu,
+};
+
+/** `<host>:<container>` for a directory under the storage root, the only mounts pierhead makes. */
+const mountStep =
+  (
+    name: string,
+    validName: (name: string) => boolean,
+    validPath: (path: string) => boolean,
+  ): StepBuilder =>
+  ([app = "", mount = "", ...rest]) => {
+    const prefix = `${storageRoot}/`;
+    const [dir = "", path = ""] = mount.startsWith(prefix)
+      ? mount.slice(prefix.length).split(/:(.*)/s)
+      : [];
+    if (rest.length > 0 || !validName(dir) || !validPath(path)) {
+      throw new Error(`Invalid mount: ${JSON.stringify(mount)}`);
+    }
+    return [name, appArg(app), mount];
+  };
+
 /**
  * The writes behind `POST /api/operations/:op`, keyed by Dokku command. Each re-checks the
  * argv the shared operations table built (the server never trusts the client), so a
@@ -176,6 +333,30 @@ const operationSteps = {
   // Both redeploy a deployed app and `disable` clears its port map.
   "proxy:enable": appStep("proxy:enable"),
   "proxy:disable": appStep("proxy:disable"),
+  // Redeploys unless `--skip-deploy`; the route streams it then.
+  "ps:scale": scaleStep,
+  "network:create": valueStep("network:create", [], isNetworkName, "network name"),
+  "network:destroy": valueStep("network:destroy", ["--force"], isSafeArg, "network name"),
+  "network:set": networkSetStep,
+  "docker-options:add": aliasStep("docker-options:add", true),
+  "docker-options:remove": aliasStep("docker-options:remove", false),
+  "builder:set": builderStep("builder:set", ["build-dir", "selected"]),
+  "builder-dockerfile:set": builderStep("builder-dockerfile:set", ["dockerfile-path"]),
+  "resource:limit": resourceStep("resource:limit", resourceFlags),
+  "resource:reserve": resourceStep("resource:reserve", resourceFlags),
+  "resource:limit-clear": resourceStep("resource:limit-clear", {
+    "--process-type": isResourceProcessType,
+  }),
+  "resource:reserve-clear": resourceStep("resource:reserve-clear", {
+    "--process-type": isResourceProcessType,
+  }),
+  "storage:create": valueStep("storage:create", [], isStorageName, "storage name"),
+  "storage:mount": mountStep("storage:mount", isStorageName, isContainerPath),
+  "storage:unmount": mountStep(
+    "storage:unmount",
+    isExistingStorageName,
+    isSafeContainerPath,
+  ),
 } satisfies Record<string, StepBuilder>;
 
 const isStep = (name: string): name is keyof typeof operationSteps =>
@@ -301,7 +482,13 @@ export function createDokku(config: DokkuConfig) {
     return built.ok ? exec(argv[0] ?? "", built.argv) : built;
   }
 
-  async function exec(name: string, argv: string[]): Promise<DokkuResult> {
+  // Every quick call shares one SSH connection, and sshd refuses more than MaxSessions (10)
+  // sessions on it, so extra parallel calls queue here. The timeout starts when a call does.
+  const limit = createLimiter(maxParallelCalls);
+
+  const exec = (name: string, argv: string[]) => limit(() => execNow(name, argv));
+
+  async function execNow(name: string, argv: string[]): Promise<DokkuResult> {
     const timeoutMs = commandTimeoutMs[name] ?? config.timeoutMs;
     let timedOut = false;
     try {
@@ -418,6 +605,9 @@ export function createDokku(config: DokkuConfig) {
 
   return Object.assign(run, { stream, step, streamStep });
 }
+
+/** Parallel quick calls on the shared connection; sshd's default MaxSessions is 10. */
+const maxParallelCalls = 8;
 
 /** Minimum time a streaming ssh lives before `kill` takes effect, see `stream`. */
 const settleMs = 1000;

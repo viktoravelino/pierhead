@@ -1,15 +1,13 @@
 import { ArrowRight, X } from "lucide-react";
-import type { ReactNode } from "react";
-import type { OperationId, OperationRequest } from "../../../shared/operations";
-import type { PortMapping } from "../../../shared/types";
+import type { OperationRequest } from "../../../shared/operations";
+import type { NetworkAttachment, PortMapping } from "../../../shared/types";
 import type { AppView } from "../../api/client";
-import { operationAvailability } from "../../api/operations";
 import { DomainLink } from "../../components/DomainLink";
 import {
-  usePendingOperation,
-  useRequestOperation,
-  useWrites,
-} from "../../components/OperationHost";
+  OperationButton,
+  removeButton,
+  textButton,
+} from "../../components/OperationButton";
 import { Signal } from "../../components/Signal";
 import { EmptyNote, Mono, Panel } from "../../components/ui";
 
@@ -22,55 +20,11 @@ function Command({ children }: { children: string }) {
   );
 }
 
-const textButton =
-  "h-8 rounded-sm border border-line-strong px-2.5 text-sm font-medium enabled:hover:bg-raised disabled:cursor-not-allowed disabled:opacity-45";
-
-const removeButton =
-  "grid size-8 shrink-0 place-items-center rounded-sm text-dim enabled:hover:bg-crit/10 enabled:hover:text-crit disabled:cursor-not-allowed disabled:opacity-45";
-
-/** What a control for `op` on this app says when it cannot be used, if anything. */
-function useDisabledReason(op: OperationId, app: AppView) {
-  const writes = useWrites();
-  const pending = usePendingOperation();
-  const availability = operationAvailability(op, app);
-  if (!writes.enabled) return writes.reason;
-  if (!availability.ok) return availability.reason;
-  if (pending) return "Another operation is running.";
-  return undefined;
-}
-
-/** Opens the dialog for `request`; disabled, with the reason as its tooltip, when it cannot run. */
-function OperationButton({
-  app,
-  request,
-  note,
-  className,
-  label,
-  children,
-}: {
-  app: AppView;
-  request: OperationRequest;
-  /** Shown in the dialog under the effect. */
-  note?: string;
-  className: string;
-  label: string;
-  children: ReactNode;
-}) {
-  const open = useRequestOperation();
-  const disabledReason = useDisabledReason(request.op, app);
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      disabled={disabledReason !== undefined}
-      title={disabledReason ?? label}
-      onClick={() => open(request, note)}
-      className={className}
-    >
-      {children}
-    </button>
-  );
-}
+const attachmentRows = [
+  { property: "initial-network", label: "Initial network" },
+  { property: "attach-post-create", label: "Attach after create" },
+  { property: "attach-post-deploy", label: "Attach after deploy" },
+] as const satisfies readonly { property: NetworkAttachment; label: string }[];
 
 const defaultMapping: PortMapping = { scheme: "http", host: 80, container: 5000 };
 
@@ -277,25 +231,93 @@ export function NetworkTab({ app }: { app: AppView }) {
         <Command>{`dokku ports:report ${app.name}`}</Command>
       </Panel>
 
-      <Panel title="Attached networks">
-        {app.networks.length === 0 && <EmptyNote>No networks attached.</EmptyNote>}
-        <ul className="divide-y divide-line">
-          {app.networks.map((n) => (
-            <li
-              key={n.name}
-              className="flex items-center justify-between gap-3 px-4 py-2.5"
-            >
-              <Mono>{n.name}</Mono>
-              {n.alias ? (
-                <span className="text-xs text-dim">
-                  alias <Mono className="text-fg">{n.alias}</Mono>
-                </span>
+      <Panel
+        title="Attached networks"
+        action={
+          <OperationButton
+            app={app}
+            request={{
+              op: "network:alias-add",
+              app: app.name,
+              alias: "",
+              rebuild: false,
+            }}
+            label="Add alias"
+            className={textButton}
+          >
+            Add alias
+          </OperationButton>
+        }
+      >
+        <dl className="divide-y divide-line">
+          {attachmentRows.map(({ property, label }) => {
+            const networks = app.attachments[property];
+            return (
+              <div
+                key={property}
+                className="flex items-center justify-between gap-3 px-4 py-2.5"
+              >
+                <div className="min-w-0">
+                  <dt className="label">{label}</dt>
+                  <dd className="flex flex-wrap gap-x-3">
+                    {networks.length > 0 ? (
+                      networks.map((n) => <Mono key={n}>{n}</Mono>)
+                    ) : (
+                      <span className="text-faint">none</span>
+                    )}
+                  </dd>
+                </div>
+                <OperationButton
+                  app={app}
+                  request={{
+                    op: "network:set",
+                    app: app.name,
+                    property,
+                    networks,
+                    rebuild: false,
+                  }}
+                  label={`Edit ${label}`}
+                  className={textButton}
+                >
+                  Edit
+                </OperationButton>
+              </div>
+            );
+          })}
+          <div className="flex flex-col gap-1.5 px-4 py-2.5">
+            <dt className="label">Aliases</dt>
+            <dd>
+              {app.aliases.length > 0 ? (
+                <ul className="flex flex-col">
+                  {app.aliases.map((alias) => (
+                    <li key={alias} className="flex items-center justify-between gap-3">
+                      <Mono>{alias}</Mono>
+                      <OperationButton
+                        app={app}
+                        request={{
+                          op: "network:alias-remove",
+                          app: app.name,
+                          alias,
+                          rebuild: false,
+                        }}
+                        label={`Remove alias ${alias}`}
+                        className={removeButton}
+                      >
+                        <X className="size-4" aria-hidden="true" />
+                      </OperationButton>
+                    </li>
+                  ))}
+                </ul>
               ) : (
-                <span className="text-xs text-faint">no alias</span>
+                <span className="text-faint">none</span>
               )}
-            </li>
-          ))}
-        </ul>
+            </dd>
+          </div>
+        </dl>
+        <p className="border-t border-line px-4 py-2.5 text-xs text-faint">
+          Attach settings and aliases apply on the next deploy or rebuild; the running
+          container keeps the networks it has until then.
+        </p>
         <Command>{`dokku network:report ${app.name}`}</Command>
       </Panel>
     </div>

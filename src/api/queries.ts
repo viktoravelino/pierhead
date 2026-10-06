@@ -11,6 +11,7 @@ import {
   getHostDetails,
   getHostMetrics,
   getNetworks,
+  getStorageUsers,
 } from "./client";
 
 // Live app state is polled; TanStack pauses the interval while the tab is hidden. Failures
@@ -39,6 +40,11 @@ export const networksQuery = queryOptions({
   queryKey: ["networks"],
   queryFn: getNetworks,
   ...poll,
+});
+export const storageUsersQuery = queryOptions({
+  queryKey: ["storage"],
+  queryFn: getStorageUsers,
+  retry: false,
 });
 // The server caches this for 60s, so polling faster only repeats the same answer.
 export const hostDetailsQuery = queryOptions({

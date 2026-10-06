@@ -22,12 +22,32 @@ export function fields(body: unknown) {
       const value = get(key);
       return typeof value === "number" ? value : refuse(`${key} must be a number.`);
     },
-    /** Reads `key` as an array of 1 to `max` items, each narrowed by `item`. */
-    list: <T>(key: string, max: number, item: (value: unknown) => T) => {
+    /** A string that is `null` or absent when there is none. */
+    optionalString: (key: string) => {
+      const value = get(key);
+      if (value === undefined || value === null) return null;
+      return typeof value === "string" ? value : refuse(`${key} must be a string.`);
+    },
+    /** A yes/no switch: false when absent. */
+    flag: (key: string) => {
+      const value = get(key);
+      if (value === undefined) return false;
+      return typeof value === "boolean" ? value : refuse(`${key} must be true or false.`);
+    },
+    /** A string that is one of `options`, narrowed to their union. */
+    oneOf: <const T extends string>(key: string, options: readonly T[]) => {
+      const value = get(key);
+      return (
+        options.find((option) => option === value) ??
+        refuse(`${key} must be one of ${options.join(", ")}.`)
+      );
+    },
+    /** Reads `key` as an array of `min` (default 1) to `max` items, each narrowed by `item`. */
+    list: <T>(key: string, max: number, item: (value: unknown) => T, min = 1) => {
       const value = get(key);
       if (!Array.isArray(value)) return refuse(`${key} must be an array.`);
-      if (value.length < 1 || value.length > max) {
-        return refuse(`${key} must have 1 to ${max} entries.`);
+      if (value.length < min || value.length > max) {
+        return refuse(`${key} must have ${min} to ${max} entries.`);
       }
       return value.map(item);
     },

@@ -1,6 +1,7 @@
 // Parsers from Dokku's flat `--format json` report maps (and raw log lines) to domain types.
 // The server runs them on what it gets from the host; the mock client runs them on fixtures.
 
+import { networkAttachments, storageNameOf } from "./grammar";
 import type {
   AppDetail,
   AppNetwork,
@@ -8,7 +9,9 @@ import type {
   AppStatus,
   AppSummary,
   Build,
+  BuilderSettings,
   DokkuHost,
+  FormationEntry,
   LogEvent,
   Network,
   NetworkAttachment,
@@ -16,8 +19,12 @@ import type {
   PortMapping,
   Process,
   ProcessState,
+  ResourceEntry,
+  ResourceKind,
+  ResourceValues,
   Revision,
   SshKey,
+  StorageMount,
 } from "./types";
 
 export type Report = Record<string, string>;
@@ -32,6 +39,10 @@ export function parseReport(json: string): Report {
     Object.entries(value).map(([key, v]) => [key, typeof v === "string" ? v : String(v)]),
   );
 }
+
+/** Network lists: Dokku joins several names with commas, `network:set` takes them space separated. */
+const networkNames = (value: string | undefined) =>
+  (value ?? "").split(/[\s,]+/).filter(Boolean);
 
 const words = (value: string | undefined) => (value ?? "").split(" ").filter(Boolean);
 
@@ -119,18 +130,21 @@ export function parseBuild(report: Report): Build {
 /** `network:report`: every network the app attaches to, without duplicates. */
 export function parseNetworks(report: Report): AppNetwork[] {
   const names = [
-    ...words(report["computed-initial-network"]),
-    ...words(report["computed-attach-post-create"]),
-    ...words(report["computed-attach-post-deploy"]),
+    ...networkNames(report["computed-initial-network"]),
+    ...networkNames(report["computed-attach-post-create"]),
+    ...networkNames(report["computed-attach-post-deploy"]),
   ];
   return [...new Set(names)].map((name) => ({ name, alias: null }));
 }
 
-const networkAttachments = [
-  "initial-network",
-  "attach-post-create",
-  "attach-post-deploy",
-] as const satisfies readonly NetworkAttachment[];
+/** The networks the app itself sets (the report's `computed-*` keys include global defaults). */
+export const parseAttachments = (
+  report: Report,
+): Record<NetworkAttachment, string[]> => ({
+  "initial-network": networkNames(report["initial-network"]),
+  "attach-post-create": networkNames(report["attach-post-create"]),
+  "attach-post-deploy": networkNames(report["attach-post-deploy"]),
+});
 
 /** A network as `network:list --format json` describes it, before apps are attached. */
 export type NetworkInfo = Omit<Network, "members">;
@@ -166,6 +180,83 @@ function bool(entry: Record<string, unknown>, key: string, command: string) {
   return value;
 }
 
+/** `ps:scale <app> --format json`: `[{ process_type, quantity }]`. */
+export const parseFormation = (stdout: string): FormationEntry[] =>
+  parseObjectList(stdout, "ps:scale").map((p) => {
+    const count = p.quantity;
+    if (typeof count !== "number")
+      throw new Error('ps:scale: "quantity" should be a number');
+    return { type: str(p, "process_type", "ps:scale"), count };
+  });
+
+/**
+ * `storage:list <app> --format json`: `[{ entry_name, host_path, container_path }]`. Only
+ * directories under the storage root get a `name`; Dokku accepts any host path.
+ */
+export const parseStorage = (stdout: string): StorageMount[] =>
+  parseObjectList(stdout, "storage:list").map((m) => {
+    const hostPath = str(m, "host_path", "storage:list");
+    return {
+      hostPath,
+      containerPath: str(m, "container_path", "storage:list"),
+      name: storageNameOf(hostPath),
+    };
+  });
+
+const aliasOption = "--network-alias ";
+
+/**
+ * `docker-options:report <app> --format json` carries each phase's options as an array
+ * (`deploy-list`); the aliases are its `--network-alias <name>` entries, in order.
+ */
+export function parseAliases(stdout: string): string[] {
+  const value: unknown = JSON.parse(stdout);
+  const list = isRecord(value) ? value["deploy-list"] : undefined;
+  if (!Array.isArray(list) || !list.every((o) => typeof o === "string")) {
+    throw new Error('docker-options:report: "deploy-list" should be an array of strings');
+  }
+  return list.flatMap((option: string) =>
+    option.startsWith(aliasOption) ? [option.slice(aliasOption.length).trim()] : [],
+  );
+}
+
+/** `builder:report` and `builder-dockerfile:report`: what the app itself sets (never the computed values). */
+export const parseBuilderSettings = (
+  builder: Report,
+  dockerfile: Report,
+): BuilderSettings => ({
+  selected: builder.selected || null,
+  buildDir: builder["build-dir"] || null,
+  dockerfilePath: dockerfile["dockerfile-path"] || null,
+});
+
+const resourceKey = /^([^.]+)\.(limit|reserve)\.(memory|cpu)$/;
+
+/**
+ * `resource:report <app> --format json`: keys like `web.limit.memory` and
+ * `_default_.reserve.cpu` (the `resource-` prefixed duplicates are ignored). One entry per
+ * process type that sets anything, the default first.
+ */
+export function parseResources(report: Report): ResourceEntry[] {
+  const unset: ResourceValues = { memory: null, cpu: null };
+  const byType = new Map<string, Record<ResourceKind, ResourceValues>>();
+  for (const [key, value] of Object.entries(report)) {
+    if (key.startsWith("resource-")) continue;
+    const [, type, kind, field] = key.match(resourceKey) ?? [];
+    if (!type || !value || (kind !== "limit" && kind !== "reserve")) continue;
+    if (field !== "memory" && field !== "cpu") continue;
+    const entry = byType.get(type) ?? { limit: unset, reserve: unset };
+    byType.set(type, { ...entry, [kind]: { ...entry[kind], [field]: value } });
+  }
+  return [...byType]
+    .map(([type, { limit, reserve }]) => ({
+      processType: type === "_default_" ? null : type,
+      limit,
+      reserve,
+    }))
+    .sort((a, b) => (a.processType ?? "").localeCompare(b.processType ?? ""));
+}
+
 /** `network:list --format json`: `[{ Name, Driver, Scope, DokkuManaged, Internal, ... }]`. */
 export const parseNetworkList = (stdout: string): NetworkInfo[] =>
   parseObjectList(stdout, "network:list").map((n) => ({
@@ -190,7 +281,7 @@ export const buildNetworks = (
       ...network,
       members: apps.flatMap(({ name, report }) => {
         const via = networkAttachments.filter((setting) =>
-          words(report[`computed-${setting}`]).includes(network.name),
+          networkNames(report[`computed-${setting}`]).includes(network.name),
         );
         return via.length > 0 ? [{ app: name, via }] : [];
       }),
@@ -245,7 +336,19 @@ export type SummaryReports = {
   gitRev?: string;
 };
 
-export type DetailReports = SummaryReports & { ports: Report; network: Report };
+/** What the detail reads besides the summary's reports: JSON reports, and the raw stdout of the list commands. */
+export type DetailReports = SummaryReports & {
+  ports: Report;
+  network: Report;
+  resource: Report;
+  builderDockerfile: Report;
+  /** `ps:scale --format json` */
+  scale: string;
+  /** `storage:list --format json` */
+  storage: string;
+  /** `docker-options:report --format json` */
+  dockerOptions: string;
+};
 
 export function parseAppSummary(name: string, r: SummaryReports): AppSummary {
   const processes = parseProcesses(r.ps);
@@ -276,6 +379,13 @@ export function parseAppDetail(name: string, r: DetailReports): AppDetail {
     proxyType: parseProxyType(r.proxy),
     ports: portsOf(r.ports, status.kind !== "not-deployed" && proxyEnabled),
     networks: parseNetworks(r.network),
+    attachments: parseAttachments(r.network),
+    aliases: parseAliases(r.dockerOptions),
+    formation: parseFormation(r.scale),
+    canScale: r.ps["can-scale"] !== "false",
+    builder: parseBuilderSettings(r.builder, r.builderDockerfile),
+    resources: parseResources(r.resource),
+    storage: parseStorage(r.storage),
   };
 }
 
