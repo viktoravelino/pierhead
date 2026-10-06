@@ -30,7 +30,9 @@ describe("parseAppDetail", () => {
       { name: "web.1", type: "web", state: "running", cid: "eb74d208655" },
     ]);
     expect(app.restartPolicy).toBe("on-failure:10");
-    expect(app.ports).toEqual([{ scheme: "http", host: 80, container: 80 }]);
+    expect(app.ports).toEqual([
+      { scheme: "http", host: 80, container: 80, detected: false },
+    ]);
     expect(app.domains).toEqual(["hello.dokku.localhost"]);
     expect(app.globalDomain).toBe("dokku.localhost");
     expect(app.proxyEnabled).toBe(true);
@@ -62,7 +64,9 @@ describe("parseAppDetail", () => {
   test("multi-domain app with a custom port mapping", () => {
     const app = parseAppDetail("hello-multi", multiDomain);
     expect(app.domains).toEqual(["hello-multi.dokku.localhost", "multi.dokku.localhost"]);
-    expect(app.ports).toEqual([{ scheme: "http", host: 8081, container: 80 }]);
+    expect(app.ports).toEqual([
+      { scheme: "http", host: 8081, container: 80, detected: false },
+    ]);
   });
 });
 
@@ -76,7 +80,9 @@ describe("parseAppDetail on a host that sets no explicit ports or git dir", () =
 
   test("uses the detected port map and has no revision", () => {
     const app = parseAppDetail("insta-down", bare);
-    expect(app.ports).toEqual([{ scheme: "http", host: 8000, container: 8000 }]);
+    expect(app.ports).toEqual([
+      { scheme: "http", host: 8000, container: 8000, detected: true },
+    ]);
     expect(app.revision).toBeNull();
   });
 

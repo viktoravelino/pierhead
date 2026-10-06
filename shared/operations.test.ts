@@ -88,6 +88,20 @@ describe("operations table", () => {
     );
   });
 
+  test("proxy:enable can restore the domains Dokku cleared too", () => {
+    const req: OperationRequest = {
+      op: "proxy:enable",
+      app,
+      ports: [http80],
+      domains: ["a.example.com", "b.example.com"],
+    };
+    expect(commandSteps(req)).toEqual([
+      ["proxy:enable", app],
+      ["ports:set", app, "http:80:5000"],
+      ["domains:set", app, "a.example.com", "b.example.com"],
+    ]);
+  });
+
   test("a valid request parses back to itself", () => {
     for (const id of ids)
       expect(parseOperation(id, valid[id].req)).toEqual(valid[id].req);
@@ -158,6 +172,32 @@ describe("request validation", () => {
       app,
       domains: Array.from({ length: 21 }, (_, i) => `d${i}.com`),
     });
+  });
+
+  // Removals and restores take what Dokku holds; only the shell-safety rules apply.
+  test("removals accept any stored domain or scheme that is safe to pass on", () => {
+    const stored = { scheme: "tcp", host: 80, container: 80 };
+    expect(
+      parseOperation("domains:remove", { app, domains: ["Old_Host.Example.com"] }),
+    ).toEqual({
+      op: "domains:remove",
+      app,
+      domains: ["Old_Host.Example.com"],
+    });
+    expect(typeof parseOperation("ports:remove", { app, mappings: [stored] })).toBe(
+      "object",
+    );
+    expect(
+      typeof parseOperation("domains:add", { app, domains: ["Old_Host.Example.com"] }),
+    ).toBe("string");
+    expect(typeof parseOperation("ports:add", { app, mappings: [stored] })).toBe(
+      "string",
+    );
+    for (const bad of ["-h", "a b", "a'b", "$HOME", "a;b", ""]) {
+      refused("domains:remove", { app, domains: [bad] });
+      refused("ports:remove", { app, mappings: [{ ...stored, scheme: bad }] });
+      refused("proxy:enable", { app, domains: [bad] });
+    }
   });
 
   test("ports: malformed mappings, bad ranges, reused scheme:host", () => {
@@ -231,6 +271,24 @@ describe("availability", () => {
     });
     expect(
       operationAvailability("ps:rebuild", { status, revision, proxyEnabled: true }).ok,
+    ).toBe(true);
+  });
+
+  test("domain edits need the proxy; the reason says to enable it", () => {
+    const status = { kind: "running" } as const;
+    for (const op of ["domains:add", "domains:remove", "domains:set"] as const) {
+      expect(
+        operationAvailability(op, { status, revision, proxyEnabled: false }),
+      ).toEqual({
+        ok: false,
+        reason: "Enable the proxy first.",
+      });
+      expect(operationAvailability(op, { status, revision, proxyEnabled: true }).ok).toBe(
+        true,
+      );
+    }
+    expect(
+      operationAvailability("ports:set", { status, revision, proxyEnabled: false }).ok,
     ).toBe(true);
   });
 

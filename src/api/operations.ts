@@ -135,7 +135,7 @@ export const operationUi = {
     pending: "Enabling...",
     done: "Enabled the proxy for {app}.",
     effect:
-      "Puts nginx in front of the app again. Dokku redeploys a deployed app (about 25 s) and does not bring back the port map it cleared when the proxy was disabled.",
+      "Puts nginx in front of the app again. Dokku redeploys a deployed app (about 25 s) and brings back only the default domain, not the port map or custom domains it cleared when the proxy was disabled.",
     tone: "neutral",
   },
   "proxy:disable": {
@@ -144,7 +144,7 @@ export const operationUi = {
     pending: "Disabling...",
     done: "Disabled the proxy for {app}.",
     effect:
-      "Removes nginx from in front of the app. Dokku redeploys a deployed app (about 25 s) and clears its port map; afterwards only its attached networks reach it. Enabling the proxy again offers to restore the map.",
+      "Removes nginx from in front of the app. Dokku redeploys a deployed app (about 25 s) and clears its port map and every custom domain (only the default comes back on enable); afterwards only its attached networks reach it. Pierhead remembers both until it restarts, and enabling the proxy offers to restore them.",
     tone: "danger",
   },
 } as const satisfies Record<OperationId, OperationUi>;

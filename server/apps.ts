@@ -9,7 +9,7 @@ import {
   type Report,
 } from "../shared/parse";
 import type { AppDetail, AppSummary, Network } from "../shared/types";
-import type { Dokku, DokkuError, DokkuResult } from "./dokku";
+import type { Dokku, DokkuError, DokkuResult, DokkuRun } from "./dokku";
 
 export type Outcome<T> = { ok: true; value: T } | { ok: false; error: DokkuError };
 
@@ -56,7 +56,7 @@ const parseReportLines = (stdout: string): Report[] =>
  * Undefined when not needed or when the lookup fails (an unset key exits 1); a missing
  * revision is not worth failing the read.
  */
-async function gitRevOf(dokku: Dokku, name: string, git: Report) {
+async function gitRevOf(dokku: DokkuRun, name: string, git: Report) {
   if (!needsGitRev(git)) return undefined;
   const result = await dokku("config:get", name, "GIT_REV");
   return result.ok ? result.stdout : undefined;
@@ -133,7 +133,7 @@ export const listNetworks = (dokku: Dokku) =>
  * Which app serves each domain: `apps:list` and the all-apps `domains:report`, two SSH
  * calls in parallel, zipped by position like `listApps`.
  */
-export const domainOwners = (dokku: Dokku) =>
+export const domainOwners = (dokku: DokkuRun) =>
   outcome<Map<string, string>>(async () => {
     const [names, reports] = await Promise.all([
       dokku("apps:list"),
@@ -159,7 +159,7 @@ export const isNotFound = (error: DokkuError) =>
  * One app's full detail: seven reports in parallel over the shared connection, then
  * `GIT_REV` when the git report has no sha.
  */
-export async function getApp(dokku: Dokku, name: string): Promise<Outcome<AppDetail>> {
+export async function getApp(dokku: DokkuRun, name: string): Promise<Outcome<AppDetail>> {
   const result = await outcome<AppDetail>(async () => {
     const [ps, domains, ports, network, proxy, builder, git] = await Promise.all([
       dokku("ps:report", name),

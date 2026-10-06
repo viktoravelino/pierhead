@@ -43,12 +43,15 @@ function useDisabledReason(op: OperationId, app: AppView) {
 function OperationButton({
   app,
   request,
+  note,
   className,
   label,
   children,
 }: {
   app: AppView;
   request: OperationRequest;
+  /** Shown in the dialog under the effect. */
+  note?: string;
   className: string;
   label: string;
   children: ReactNode;
@@ -61,7 +64,7 @@ function OperationButton({
       aria-label={label}
       disabled={disabledReason !== undefined}
       title={disabledReason ?? label}
-      onClick={() => open(request)}
+      onClick={() => open(request, note)}
       className={className}
     >
       {children}
@@ -71,10 +74,30 @@ function OperationButton({
 
 const defaultMapping: PortMapping = { scheme: "http", host: 80, container: 5000 };
 
+const setMapping = ({ scheme, host, container }: PortMapping): PortMapping => ({
+  scheme,
+  host,
+  container,
+});
+
 export function NetworkTab({ app }: { app: AppView }) {
+  const { proxyRestore } = app;
   const proxyRequest: OperationRequest = app.proxyEnabled
     ? { op: "proxy:disable", app: app.name }
-    : { op: "proxy:enable", app: app.name, ports: app.previousPorts };
+    : {
+        op: "proxy:enable",
+        app: app.name,
+        ...(proxyRestore && proxyRestore.ports.length > 0
+          ? { ports: proxyRestore.ports }
+          : {}),
+        ...(proxyRestore && proxyRestore.domains.length > 0
+          ? { domains: proxyRestore.domains }
+          : {}),
+      };
+  // Dokku shows the map it detected at deploy when none is set; it cannot be edited in
+  // place, so the first change saves the whole list as the explicit map.
+  const detectedPorts = app.ports.filter((p) => p.detected);
+  const detectedOnly = app.ports.length > 0 && detectedPorts.length === app.ports.length;
   return (
     <div className="grid items-start gap-6 lg:grid-cols-2">
       <Panel
@@ -102,9 +125,10 @@ export function NetworkTab({ app }: { app: AppView }) {
             {app.proxyEnabled ? "Disable proxy" : "Enable proxy"}
           </OperationButton>
         </div>
-        {!app.proxyEnabled && app.previousPorts && (
+        {!app.proxyEnabled && proxyRestore && (
           <p className="px-4 pb-3 text-xs text-faint">
-            The port map before the proxy was disabled can be restored when enabling it.
+            The port map and domains from before the proxy was disabled can be restored
+            when enabling it.
           </p>
         )}
         <Command>{`dokku proxy:${app.proxyEnabled ? "disable" : "enable"} ${app.name}`}</Command>
@@ -177,7 +201,8 @@ export function NetworkTab({ app }: { app: AppView }) {
               request={{
                 op: "ports:set",
                 app: app.name,
-                mappings: app.ports.length > 0 ? app.ports : [defaultMapping],
+                mappings:
+                  app.ports.length > 0 ? app.ports.map(setMapping) : [defaultMapping],
               }}
               label="Set port mappings"
               className={textButton}
@@ -186,7 +211,23 @@ export function NetworkTab({ app }: { app: AppView }) {
             </OperationButton>
             <OperationButton
               app={app}
-              request={{ op: "ports:add", app: app.name, mappings: [defaultMapping] }}
+              request={
+                detectedOnly
+                  ? {
+                      op: "ports:set",
+                      app: app.name,
+                      mappings: [
+                        ...app.ports.map(setMapping),
+                        { ...defaultMapping, host: 8080 },
+                      ],
+                    }
+                  : { op: "ports:add", app: app.name, mappings: [defaultMapping] }
+              }
+              note={
+                detectedOnly
+                  ? "No port map is set: these mappings are what Dokku detected at the last deploy. Adding one saves the whole list below as the app's explicit map."
+                  : undefined
+              }
               label="Add port mapping"
               className={textButton}
             >
@@ -206,14 +247,27 @@ export function NetworkTab({ app }: { app: AppView }) {
                 <Mono className="tabular">host {p.host}</Mono>
                 <ArrowRight className="size-3.5 text-faint" aria-label="maps to" />
                 <Mono className="tabular">container {p.container}</Mono>
-                <OperationButton
-                  app={app}
-                  request={{ op: "ports:remove", app: app.name, mappings: [p] }}
-                  label={`Remove ${p.scheme}:${p.host}:${p.container}`}
-                  className={`${removeButton} ml-auto`}
-                >
-                  <X className="size-4" aria-hidden="true" />
-                </OperationButton>
+                {p.detected ? (
+                  <span
+                    className="ml-auto text-xs text-faint"
+                    title="Detected at the last deploy, not set; there is nothing to remove."
+                  >
+                    detected
+                  </span>
+                ) : (
+                  <OperationButton
+                    app={app}
+                    request={{
+                      op: "ports:remove",
+                      app: app.name,
+                      mappings: [setMapping(p)],
+                    }}
+                    label={`Remove ${p.scheme}:${p.host}:${p.container}`}
+                    className={`${removeButton} ml-auto`}
+                  >
+                    <X className="size-4" aria-hidden="true" />
+                  </OperationButton>
+                )}
               </li>
             ))}
           </ul>

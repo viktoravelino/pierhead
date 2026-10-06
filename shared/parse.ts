@@ -4,6 +4,7 @@
 import type {
   AppDetail,
   AppNetwork,
+  AppPort,
   AppStatus,
   AppSummary,
   Build,
@@ -79,6 +80,18 @@ export function parsePorts(report: Report, detectedApplies: boolean): PortMappin
       ? [{ scheme, host: h, container: c }]
       : [];
   });
+}
+
+/**
+ * The ports an app shows: its explicit map, else (when `detectedApplies`) the one Dokku
+ * detected at deploy, flagged so the UI does not offer to remove what is not set.
+ */
+export function portsOf(report: Report, detectedApplies: boolean): AppPort[] {
+  const explicit = parsePorts(report, false);
+  if (explicit.length > 0 || !detectedApplies) {
+    return explicit.map((port) => ({ ...port, detected: false }));
+  }
+  return parsePorts(report, true).map((port) => ({ ...port, detected: true }));
 }
 
 export const parseProxyEnabled = (report: Report) => report["proxy-enabled"] === "true";
@@ -261,7 +274,7 @@ export function parseAppDetail(name: string, r: DetailReports): AppDetail {
     processes,
     restartPolicy: r.ps["computed-restart-policy"] ?? "no",
     proxyType: parseProxyType(r.proxy),
-    ports: parsePorts(r.ports, status.kind !== "not-deployed" && proxyEnabled),
+    ports: portsOf(r.ports, status.kind !== "not-deployed" && proxyEnabled),
     networks: parseNetworks(r.network),
   };
 }

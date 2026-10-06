@@ -95,6 +95,8 @@ API: `{ op: "ports:add" | "ports:remove" | "ports:set"; app; mappings: PortMappi
 
 UI: Port mappings panel gets add and remove, with scheme select, two number fields, the warning for `https` ("no TLS on this host; Cloudflare terminates it; Dokku will ignore this mapping"). The Proxy panel's Enable/Disable becomes a button; its dialog says plainly that Dokku redeploys the app (about 25 s) and, for disable, that the port map is cleared and only domains or the network alias reach the app afterwards. A "Rebuild config" link sits under the panel.
 
+*Implementation note (PR 1):* `proxy:disable` also empties the app's domains (Dokku 0.38 disables the domains plugin for it and `proxy:enable` brings back only the default vhost), so the server reads the live ports and domains before disabling, keeps both in memory (`AppDetail.proxyRestore`) and `proxy:enable` with `ports` and `domains` follows up with `ports:set` and `domains:set`. The disable dialog says so. Domain operations are unavailable while the proxy is off (Dokku answers 0 and saves nothing). Ports Dokku merely detected cannot be removed; the first change to such an app saves them as the explicit map with `ports:set`.
+
 Invalidation: app, list (`proxyEnabled` is in the summary). Risks: a proxy toggle restarts a production app; an `https` mapping is a no-op here. Effort: M.
 
 ### 3.5 Scale processes

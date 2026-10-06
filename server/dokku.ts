@@ -1,5 +1,5 @@
 import { configValueProblem, isConfigKey } from "../shared/config";
-import { isAppName, isDomain, parsePortMapping } from "../shared/grammar";
+import { isAppName, isSafeDomain, parsePortMapping } from "../shared/grammar";
 
 /** Throws on anything that is not a valid app name; sshd joins argv with spaces. */
 function appArg(app: string) {
@@ -52,6 +52,8 @@ const commands = {
   version: () => ["version"],
   "apps:list": () => ["apps:list", "--format", "json"],
   "apps:exists": (app: string) => ["apps:exists", appArg(app)],
+  // Exit 0 while a deploy lock is held, 1 ("Deploy lock does not exist") when it is not.
+  "apps:locked": (app: string) => ["apps:locked", appArg(app)],
   "ps:report": report("ps"),
   "domains:report": report("domains"),
   "ports:report": report("ports"),
@@ -133,15 +135,19 @@ const listStep =
     return [name, appArg(app), ...values.map(value)];
   };
 
-/** A domain can contain `*`, which the remote shell would expand, so it is quoted. */
+/**
+ * Whether a domain may reach the shell at all (the table's `parse` holds additions to the
+ * stricter hostname grammar). It can contain `*`, which the remote shell would expand, so
+ * it is quoted.
+ */
 function domainArg(domain: string) {
-  if (!isDomain(domain)) throw new Error(`Invalid domain: ${JSON.stringify(domain)}`);
+  if (!isSafeDomain(domain)) throw new Error(`Invalid domain: ${JSON.stringify(domain)}`);
   return shellQuote(domain);
 }
 
-/** `http:80:5000`; the grammar leaves nothing for a shell to act on. */
+/** `http:80:5000` with a scheme that is safe to pass on; nothing here is left for a shell to act on. */
 function portArg(mapping: string) {
-  if (!parsePortMapping(mapping)) {
+  if (!parsePortMapping(mapping, false)) {
     throw new Error(`Invalid port mapping: ${JSON.stringify(mapping)}`);
   }
   return mapping;
@@ -456,5 +462,14 @@ async function* readLines(source: ReadableStream<Uint8Array>) {
 
 /** A runner as returned by `createDokku`. */
 export type Dokku = ReturnType<typeof createDokku>;
+
+/** The read-only part of `Dokku`: what the checks and reads need, so a test can supply a fake. */
+export type DokkuRun = <C extends DokkuCommand>(
+  name: C,
+  ...args: Parameters<(typeof commands)[C]>
+) => Promise<DokkuResult>;
+
+/** The write part of `Dokku`: operation steps, quick and streamed. */
+export type DokkuSteps = Pick<Dokku, "step" | "streamStep">;
 
 const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));

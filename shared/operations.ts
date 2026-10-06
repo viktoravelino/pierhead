@@ -4,6 +4,7 @@ import {
   isAppName,
   isDomain,
   isNewAppName,
+  isSafeDomain,
   portMappingProblem,
   reusedPort,
 } from "./grammar";
@@ -32,8 +33,8 @@ type OperationArgs = {
   "ports:add": { app: string; mappings: PortMapping[] };
   "ports:remove": { app: string; mappings: PortMapping[] };
   "ports:set": { app: string; mappings: PortMapping[] };
-  /** With `ports`, the mapping is set again right after (Dokku clears it on disable). */
-  "proxy:enable": { app: string; ports?: PortMapping[] };
+  /** With `ports` and `domains`, both are set again right after (Dokku clears them on disable). */
+  "proxy:enable": { app: string; ports?: PortMapping[]; domains?: string[] };
   "proxy:disable": { app: string };
 };
 
@@ -97,6 +98,11 @@ const psAvailability = (op: PsOp) =>
     }
   });
 
+/** Dokku saves nothing on a proxy-disabled app's domains (it answers 0 all the same). */
+const needsProxy = unlessDeploying(({ proxyEnabled }) =>
+  proxyEnabled ? available : unavailable("Enable the proxy first."),
+);
+
 const appName = (body: unknown) => {
   const app = fields(body).string("app");
   return isAppName(app) ? app : refuse(`Invalid app name: ${JSON.stringify(app)}`);
@@ -106,18 +112,29 @@ const appName = (body: unknown) => {
 const appBody = <K extends OperationId>(op: K) =>
   parseBody((body) => ({ op, app: appName(body) }));
 
-const domainsBody = <K extends OperationId>(op: K) =>
-  parseBody((body) => {
-    const domains = fields(body).list("domains", maxDomains, (value) =>
-      typeof value === "string" && isDomain(value)
-        ? value
-        : refuse(`Invalid domain: ${JSON.stringify(value)}`),
-    );
-    if (new Set(domains).size !== domains.length) refuse("A domain is listed twice.");
-    return { op, app: appName(body), domains };
-  });
+/**
+ * A list of domains. Additions (`strict`) must be well-formed hostnames; removals and
+ * restores take whatever Dokku holds, as long as it is safe to pass on.
+ */
+const domainList = (body: unknown, key: string, strict: boolean) => {
+  const domains = fields(body).list(key, maxDomains, (value) =>
+    typeof value === "string" && (strict ? isDomain(value) : isSafeDomain(value))
+      ? value
+      : refuse(`Invalid domain: ${JSON.stringify(value)}`),
+  );
+  return new Set(domains).size === domains.length
+    ? domains
+    : refuse("A domain is listed twice.");
+};
 
-const mappings = (body: unknown, key: string) => {
+const domainsBody = <K extends OperationId>(op: K, strict: boolean) =>
+  parseBody((body) => ({
+    op,
+    app: appName(body),
+    domains: domainList(body, "domains", strict),
+  }));
+
+const mappings = (body: unknown, key: string, strict: boolean) => {
   const list = fields(body).list(key, maxMappings, (value) => {
     const f = fields(value);
     const mapping = {
@@ -125,15 +142,19 @@ const mappings = (body: unknown, key: string) => {
       host: f.number("host"),
       container: f.number("container"),
     };
-    const problem = portMappingProblem(mapping);
+    const problem = portMappingProblem(mapping, strict);
     return problem ? refuse(problem) : mapping;
   });
   const reused = reusedPort(list);
   return reused ? refuse(`${reused} is mapped twice.`) : list;
 };
 
-const portsBody = <K extends OperationId>(op: K) =>
-  parseBody((body) => ({ op, app: appName(body), mappings: mappings(body, "mappings") }));
+const portsBody = <K extends OperationId>(op: K, strict: boolean) =>
+  parseBody((body) => ({
+    op,
+    app: appName(body),
+    mappings: mappings(body, "mappings", strict),
+  }));
 
 const step = (...argv: string[]) => argv;
 
@@ -191,25 +212,25 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
     availability: unlessDeploying(),
   },
   "domains:add": {
-    parse: domainsBody("domains:add"),
+    parse: domainsBody("domains:add", true),
     commands: ({ app, domains }) => [step("domains:add", app, ...domains)],
     streams: false,
-    availability: unlessDeploying(),
+    availability: needsProxy,
   },
   "domains:remove": {
-    parse: domainsBody("domains:remove"),
+    parse: domainsBody("domains:remove", false),
     commands: ({ app, domains }) => [step("domains:remove", app, ...domains)],
     streams: false,
-    availability: unlessDeploying(),
+    availability: needsProxy,
   },
   "domains:set": {
-    parse: domainsBody("domains:set"),
+    parse: domainsBody("domains:set", true),
     commands: ({ app, domains }) => [step("domains:set", app, ...domains)],
     streams: false,
-    availability: unlessDeploying(),
+    availability: needsProxy,
   },
   "ports:add": {
-    parse: portsBody("ports:add"),
+    parse: portsBody("ports:add", true),
     commands: ({ app, mappings }) => [
       step("ports:add", app, ...mappings.map(formatPortMapping)),
     ],
@@ -217,7 +238,7 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
     availability: unlessDeploying(),
   },
   "ports:remove": {
-    parse: portsBody("ports:remove"),
+    parse: portsBody("ports:remove", false),
     commands: ({ app, mappings }) => [
       step("ports:remove", app, ...mappings.map(formatPortMapping)),
     ],
@@ -225,7 +246,7 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
     availability: unlessDeploying(),
   },
   "ports:set": {
-    parse: portsBody("ports:set"),
+    parse: portsBody("ports:set", true),
     commands: ({ app, mappings }) => [
       step("ports:set", app, ...mappings.map(formatPortMapping)),
     ],
@@ -238,12 +259,16 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
       return {
         op: "proxy:enable",
         app: appName(body),
-        ...(f.has("ports") ? { ports: mappings(body, "ports") } : {}),
+        ...(f.has("ports") ? { ports: mappings(body, "ports", false) } : {}),
+        ...(f.has("domains") ? { domains: domainList(body, "domains", false) } : {}),
       };
     }),
-    commands: ({ app, ports }) => [
+    commands: ({ app, ports, domains }) => [
       step("proxy:enable", app),
-      ...(ports ? [step("ports:set", app, ...ports.map(formatPortMapping))] : []),
+      ...(ports && ports.length > 0
+        ? [step("ports:set", app, ...ports.map(formatPortMapping))]
+        : []),
+      ...(domains && domains.length > 0 ? [step("domains:set", app, ...domains)] : []),
     ],
     // A redeploy (~25s) once there is something deployed.
     streams: (_req, app) => app?.status.kind !== "not-deployed",

@@ -29,21 +29,50 @@ export const portSchemes = ["http", "https"] as const;
 
 const isPort = (n: number) => Number.isInteger(n) && n >= 1 && n <= 65535;
 
-/** Why a port mapping is refused, or null when it is well formed. */
-export function portMappingProblem({ scheme, host, container }: PortMapping) {
-  if (!portSchemes.some((s) => s === scheme)) return "The scheme must be http or https.";
-  if (!isPort(host) || !isPort(container))
+/**
+ * One word that cannot become two or act on a shell: no leading `-` (a flag), no
+ * whitespace, quotes, `$`, backslash, backticks or shell metacharacters. This is the
+ * grammar for values Dokku already holds (removals, restores), which can be anything it
+ * accepted; the strict grammars are for what pierhead lets a user add.
+ */
+export const isSafeArg = (arg: string) =>
+  arg.length > 0 &&
+  arg.length <= 253 &&
+  !arg.startsWith("-") &&
+  !/[\s'"`$\\;&|<>(){}[\]!#~?*]/.test(arg);
+
+/** `isSafeArg` for a domain, which may start with the `*.` wildcard label. */
+export const isSafeDomain = (domain: string) =>
+  isSafeArg(domain.startsWith("*.") ? domain.slice(2) : domain);
+
+/**
+ * Why a port mapping is refused, or null when it is well formed. `strict` (additions)
+ * allows http and https only; otherwise any scheme Dokku could have stored, as long as it
+ * is safe to pass on.
+ */
+export function portMappingProblem(
+  { scheme, host, container }: PortMapping,
+  strict = true,
+) {
+  if (strict && !portSchemes.some((s) => s === scheme)) {
+    return "The scheme must be http or https.";
+  }
+  if (!strict && (!isSafeArg(scheme) || scheme.includes(":"))) {
+    return "The scheme contains characters that cannot be passed to Dokku.";
+  }
+  if (!isPort(host) || !isPort(container)) {
     return "Ports are whole numbers from 1 to 65535.";
+  }
   return null;
 }
 
 /** Reads `scheme:host:container`; null for anything malformed or out of range. */
-export function parsePortMapping(text: string): PortMapping | null {
+export function parsePortMapping(text: string, strict = true): PortMapping | null {
   const [scheme, host, container, ...extra] = text.split(":");
   if (scheme === undefined || extra.length > 0) return null;
   if (!/^\d+$/.test(host ?? "") || !/^\d+$/.test(container ?? "")) return null;
   const mapping = { scheme, host: Number(host), container: Number(container) };
-  return portMappingProblem(mapping) ? null : mapping;
+  return portMappingProblem(mapping, strict) ? null : mapping;
 }
 
 /** The `scheme:host:container` form Dokku takes and prints. */

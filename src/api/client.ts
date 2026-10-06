@@ -11,10 +11,10 @@ import {
   deriveStatus,
   parseDomains,
   parseLogEvent,
-  parsePorts,
   parseProcesses,
   parseProxyEnabled,
   parseProxyType,
+  portsOf,
 } from "../../shared/parse";
 import type {
   App,
@@ -102,7 +102,7 @@ function toApp(raw: RawApp): AppView {
     proxyType: parseProxyType(raw.proxy),
     revision: { sha: lastDeploy.rev, updatedAt: lastDeploy.at },
     ...parseDomains(raw.domains),
-    ports: parsePorts(raw.ports, false),
+    ports: portsOf(raw.ports, false),
     networks: raw.networks,
     sample: { summary: raw.summary, lastDeploy },
   };
@@ -274,17 +274,19 @@ export const subscribeToLogs: (app: AppView, handlers: LogHandlers) => () => voi
 
 /**
  * Runs an operation. In "api" mode it executes on the host and resolves once Dokku is
- * done (one that redeploys reports each output line to `onOutput` as it goes); it throws
+ * done (one that redeploys calls `onStream` once the server starts streaming, then reports
+ * each output line to `onOutput` as it goes); it throws
  * an `ApiError` carrying Dokku's message when refused or failed. In "mock" mode it only
  * resolves with the command that would have run. `detail` is a one-line outcome.
  */
 export async function runOperation(
   req: OperationRequest,
   onOutput: (line: string) => void,
+  onStream: () => void,
 ): Promise<{ detail?: string }> {
   if (dataSource === "mock") {
     await latency();
     return { detail: commandLine(req) };
   }
-  return { detail: await postOperation(req, onOutput) };
+  return { detail: await postOperation(req, onOutput, onStream) };
 }

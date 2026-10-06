@@ -30,6 +30,10 @@ describe("buildStep", () => {
       },
     );
     expect(buildStep(["ports:set", "hello", "http:80:5000"]).ok).toBe(true);
+    // Removals pass what Dokku holds; the table's parse decides what may be added.
+    expect(buildStep(["ports:remove", "hello", "tcp:80:80"]).ok).toBe(true);
+    expect(buildStep(["domains:remove", "hello", "Old_Host.example.com"]).ok).toBe(true);
+    expect(buildStep(["apps:locked", "hello"]).ok).toBe(false);
   });
 
   test("refuses commands that are not operations and arguments off the grammar", () => {
@@ -41,6 +45,8 @@ describe("buildStep", () => {
       ["apps:create", "hello", "extra"],
       ["domains:add", "hello", "bad domain"],
       ["domains:add", "hello", "-h"],
+      ["domains:remove", "hello", "$HOME.example.com"],
+      ["ports:remove", "hello", "a;b:80:80"],
       ["domains:add", "hello"],
       ["ports:add", "hello", "http:80"],
       ["ports:add", "hello", "http:80:5000;ls"],

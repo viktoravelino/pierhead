@@ -10,13 +10,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { isDomain, portSchemes } from "../../shared/grammar";
+import { formatPortMapping, isDomain, portSchemes } from "../../shared/grammar";
 import {
   commandLine,
   destructiveConfirm,
   type OperationRequest,
   parseOperation,
-  streamsOutput,
 } from "../../shared/operations";
 import type { PortMapping } from "../../shared/types";
 import { backendHealthQuery, describeError } from "../api/backend";
@@ -29,8 +28,8 @@ import { useToast } from "./Toast";
 export type Writes = { enabled: true } | { enabled: false; reason: string };
 
 type OperationContextValue = {
-  /** Opens the dialog for `request`, whose form fields start from its values. */
-  request: (request: OperationRequest) => void;
+  /** Opens the dialog for `request`, whose form fields start from its values; `note` is shown in it. */
+  request: (request: OperationRequest, note?: string) => void;
   /** The operation in flight (the server runs one at a time from this tab), if any. */
   pending: OperationRequest | null;
   writes: Writes;
@@ -75,7 +74,17 @@ function WithApp({ text, app }: { text: string; app: string }) {
   );
 }
 
-type Opened = { id: number; request: OperationRequest };
+/** Whether any text field in the request is still blank (a form that has not been filled in). */
+const hasEmptyField = (value: unknown): boolean =>
+  value === ""
+    ? true
+    : Array.isArray(value)
+      ? value.some(hasEmptyField)
+      : typeof value === "object" && value !== null
+        ? Object.values(value).some(hasEmptyField)
+        : false;
+
+type Opened = { id: number; request: OperationRequest; note?: string };
 let nextOpened = 0;
 
 /** Owns the single dialog: the form and confirm, then (for a deploy) a progress panel with its output. */
@@ -113,7 +122,15 @@ export function OperationHost({ children }: { children: ReactNode }) {
 
   const mutation = useMutation({
     mutationFn: (req: OperationRequest) =>
-      runOperation(req, (line) => setLines((all) => [...all, line])),
+      runOperation(
+        req,
+        (line) => setLines((all) => [...all, line]),
+        // The form stays open until the server says it streams, so a refusal shows there.
+        () => {
+          setOpened(null);
+          setPanel(req);
+        },
+      ),
     onSuccess: ({ detail }, req) => {
       setOpened(null);
       notify(
@@ -155,13 +172,6 @@ export function OperationHost({ children }: { children: ReactNode }) {
     setLines([]);
     setFormError(null);
     mutation.mutate(confirmed);
-    const app = queryClient
-      .getQueryData(appsQuery.queryKey)
-      ?.find((a) => a.name === confirmed.app);
-    if (dataSource === "api" && streamsOutput(confirmed, app ?? null)) {
-      setOpened(null);
-      setPanel(confirmed);
-    }
   };
 
   const dialogOpen = opened !== null || panel !== null;
@@ -186,9 +196,9 @@ export function OperationHost({ children }: { children: ReactNode }) {
   return (
     <OperationContext
       value={{
-        request: (request) => {
+        request: (request, note) => {
           setFormError(null);
-          setOpened({ id: nextOpened++, request });
+          setOpened({ id: nextOpened++, request, note });
         },
         pending,
         writes,
@@ -251,6 +261,7 @@ export function OperationHost({ children }: { children: ReactNode }) {
           <OperationForm
             key={opened.id}
             initial={opened.request}
+            note={opened.note}
             writes={writes}
             running={running}
             error={formError}
@@ -266,6 +277,7 @@ export function OperationHost({ children }: { children: ReactNode }) {
 /** The confirm dialog's form: the operation's fields, the exact command, Cancel and the button. */
 function OperationForm({
   initial,
+  note,
   writes,
   running,
   error,
@@ -273,6 +285,7 @@ function OperationForm({
   onCancel,
 }: {
   initial: OperationRequest;
+  note?: string;
   writes: Writes;
   running: boolean;
   error: string | null;
@@ -280,7 +293,7 @@ function OperationForm({
   onCancel: () => void;
 }) {
   const [current, setCurrent] = useState(initial);
-  // Complaints about fields wait for the first edit.
+  // A form that opens blank does not complain until it is edited.
   const [touched, setTouched] = useState(false);
   const { data: apps = [] } = useQuery(appsQuery);
   const ui = operationUi[current.op];
@@ -317,7 +330,9 @@ function OperationForm({
 
       <Fields request={current} initial={initial} onChange={change} />
 
-      {touched && problem && (
+      {note && <p className="text-pretty text-sm text-dim">{note}</p>}
+
+      {problem && (touched || !hasEmptyField(initial)) && (
         <p role="alert" className="text-pretty text-sm text-crit">
           {problem}
         </p>
@@ -422,25 +437,42 @@ function Fields({
         />
       );
     case "proxy:enable": {
-      const previous = initial.op === "proxy:enable" ? initial.ports : undefined;
-      if (!previous) return null;
+      const saved = initial.op === "proxy:enable" ? initial : undefined;
+      if (!saved?.ports && !saved?.domains) return null;
+      const restoring = request.ports !== undefined || request.domains !== undefined;
       return (
         <label className="flex items-start gap-2.5">
           <input
             type="checkbox"
-            checked={request.ports !== undefined}
+            checked={restoring}
             onChange={(e) =>
-              onChange({ ...request, ports: e.target.checked ? previous : undefined })
+              onChange({
+                ...request,
+                ports: e.target.checked ? saved.ports : undefined,
+                domains: e.target.checked ? saved.domains : undefined,
+              })
             }
             className="mt-1 size-4 accent-accent"
           />
           <span className="text-pretty">
-            Restore the port map the app had before the proxy was disabled:{" "}
-            <span className="font-mono text-[13px]">
-              {previous
-                .map(({ scheme, host, container }) => `${scheme}:${host}:${container}`)
-                .join(" ")}
-            </span>
+            Restore what the app had before the proxy was disabled:
+            {saved.ports && (
+              <>
+                {" "}
+                ports{" "}
+                <span className="font-mono text-[13px]">
+                  {saved.ports.map(formatPortMapping).join(" ")}
+                </span>
+              </>
+            )}
+            {saved.ports && saved.domains && ","}
+            {saved.domains && (
+              <>
+                {" "}
+                domains{" "}
+                <span className="font-mono text-[13px]">{saved.domains.join(" ")}</span>
+              </>
+            )}
           </span>
         </label>
       );

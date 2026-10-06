@@ -49,6 +49,12 @@ export type PortMapping = {
   container: number;
 };
 
+/** A port mapping as the detail shows it: `detected` ones are Dokku's guess from the deploy, not set. */
+export type AppPort = PortMapping & { detected: boolean };
+
+/** What `proxy:disable` clears and `proxy:enable` does not bring back. */
+export type ProxyRestore = { ports: PortMapping[]; domains: string[] };
+
 export type AppNetwork = {
   name: string;
   alias: string | null;
@@ -85,13 +91,14 @@ export type AppDetail = AppCommon & {
   proxyType: string | null;
   /** Host-wide default domain; apps get `<app>.<globalDomain>` unless overridden. */
   globalDomain: string;
-  ports: PortMapping[];
+  ports: AppPort[];
   networks: AppNetwork[];
   /**
-   * The port map the app had when pierhead disabled its proxy (Dokku clears it, and
-   * `proxy:enable` does not restore it). Only the API server knows it, in memory.
+   * The port map and domains the app had when pierhead disabled its proxy (Dokku clears
+   * both, and `proxy:enable` brings back only the default domain). Only the API server
+   * knows them, in memory.
    */
-  previousPorts?: PortMapping[];
+  proxyRestore?: ProxyRestore;
 };
 
 /**

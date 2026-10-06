@@ -39,9 +39,9 @@ import { readDokkuHost } from "./host";
 import { createHostMetrics, loadGlancesUrl } from "./metrics";
 import {
   afterSuccess,
-  portsToRemember,
   preflight,
-  previousPorts,
+  proxyRestore,
+  restoreToSave,
   runSteps,
   streamSteps,
 } from "./operations";
@@ -191,8 +191,8 @@ const app = new Hono()
       (r) => r.ok,
     );
     if (result.ok) {
-      // What the app's port map was before pierhead disabled its proxy, if it did.
-      const app = { ...result.value, previousPorts: previousPorts.get(name) };
+      // What the app's port map and domains were before pierhead disabled its proxy, if it did.
+      const app = { ...result.value, proxyRestore: proxyRestore.get(name) };
       return c.json({ ok: true, app } as const);
     }
     return c.json(result, result.error.kind === "not-found" ? 404 : 502);
@@ -383,13 +383,7 @@ const app = new Hono()
       return c.json(invalid("invalid-body", req), 400);
     }
 
-    const checked = await preflight(dokku, req);
-    if (!checked.ok) {
-      const { status, kind, message } = checked.refusal;
-      const outcome = status === 502 ? `failed (${kind})` : `refused (${kind})`;
-      logOperation(op, req.app, outcome, startedAt);
-      return c.json(invalid(kind, message), status);
-    }
+    // Before any read of the host: a typo in the name costs nothing.
     const confirm = destructiveConfirm(req);
     if (confirm && confirm.typed !== confirm.expected) {
       logOperation(op, req.app, "refused (confirm-mismatch)", startedAt);
@@ -397,8 +391,16 @@ const app = new Hono()
       return c.json(invalid("confirm-mismatch", message), 400);
     }
 
+    const checked = await preflight(dokku, req);
+    if (!checked.ok) {
+      const { status, kind, message } = checked.refusal;
+      const outcome = status === 502 ? `failed (${kind})` : `refused (${kind})`;
+      logOperation(op, req.app, outcome, startedAt);
+      return c.json(invalid(kind, message), status);
+    }
+
     const steps = commandSteps(req);
-    const remembered = await portsToRemember(dokku, req);
+    const saved = restoreToSave(req, checked.app);
 
     if (!streamsOutput(req, checked.app)) {
       const result = await runSteps(dokku, steps);
@@ -412,7 +414,7 @@ const app = new Hono()
         logOperation(op, req.app, `refused (conflict: ${noOp})`, startedAt);
         return c.json(invalid("conflict", noOp), 409);
       }
-      afterSuccess(req, remembered);
+      afterSuccess(req, saved);
       logOperation(op, req.app, "ok", startedAt);
       return c.json({ ok: true, output: result.output } as const);
     }
@@ -426,24 +428,25 @@ const app = new Hono()
       const heartbeat = setInterval(() => {
         if (!stream.aborted) stream.write(": ping\n\n").catch(() => {});
       }, heartbeatMs);
+      let end: LogEndEvent = { kind: "exited" };
       try {
         const error = await streamSteps(dokku, steps, (line) => send("output", { line }));
+        if (error) end = { kind: "failed", message: error.message };
+        else afterSuccess(req, saved);
+      } catch (e) {
+        end = { kind: "failed", message: e instanceof Error ? e.message : String(e) };
+      } finally {
         // A failed deploy can still have changed the app, so drop the cache either way.
         invalidateApp(readCache, req.app);
-        if (!error) afterSuccess(req, remembered);
-        const end: LogEndEvent = error
-          ? { kind: "failed", message: error.message }
-          : { kind: "exited" };
-        logOperation(
-          op,
-          req.app,
-          end.kind === "failed" ? `failed (${end.message})` : "ok",
-          startedAt,
-        );
-        await send(end.kind === "exited" ? "end" : "failed", end);
-      } finally {
         clearInterval(heartbeat);
       }
+      logOperation(
+        op,
+        req.app,
+        end.kind === "failed" ? `failed (${end.message})` : "ok",
+        startedAt,
+      );
+      await send(end.kind === "exited" ? "end" : "failed", end);
     });
   });
 

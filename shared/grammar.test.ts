@@ -4,6 +4,8 @@ import {
   isAppName,
   isDomain,
   isNewAppName,
+  isSafeArg,
+  isSafeDomain,
   parsePortMapping,
   portMappingProblem,
   reusedPort,
@@ -107,5 +109,59 @@ describe("port mappings", () => {
     const a = { scheme: "http", host: 80, container: 5000 };
     expect(reusedPort([a, { ...a, container: 6000 }])).toBe("http:80");
     expect(reusedPort([a, { ...a, scheme: "https" }, { ...a, host: 81 }])).toBeNull();
+  });
+});
+
+// The grammar for what Dokku already holds: anything it accepted, if a shell cannot misread it.
+describe("safe arguments", () => {
+  test("accepts values Dokku may hold that the strict grammars refuse", () => {
+    for (const arg of ["Example.COM", "my_host.example", "tcp", "a:b", "x.y@z"]) {
+      expect(isSafeArg(arg)).toBe(true);
+    }
+    expect(isSafeDomain("*.Example_Host.com")).toBe(true);
+    expect(parsePortMapping("tcp:80:80")).toBeNull();
+    expect(parsePortMapping("tcp:80:80", false)).toEqual({
+      scheme: "tcp",
+      host: 80,
+      container: 80,
+    });
+  });
+
+  test("refuses flags, whitespace, quotes and shell syntax", () => {
+    for (const arg of [
+      "",
+      "-h",
+      "--force",
+      "a b",
+      "a\tb",
+      "a'b",
+      'a"b',
+      "$HOME",
+      "a`b`",
+      "a;b",
+      "a|b",
+      "a&b",
+      "a\\b",
+      "a*b",
+      "a(b)",
+      "a>b",
+    ]) {
+      expect(isSafeArg(arg)).toBe(false);
+    }
+    expect(isSafeDomain("*.")).toBe(false);
+    expect(isSafeDomain("*.-x")).toBe(false);
+    expect(isSafeArg("a".repeat(254))).toBe(false);
+  });
+
+  test("a loose port mapping still needs numeric ports and no colon in the scheme", () => {
+    expect(
+      portMappingProblem({ scheme: "tcp", host: 80, container: 80 }, false),
+    ).toBeNull();
+    expect(portMappingProblem({ scheme: "a;b", host: 80, container: 80 }, false)).toMatch(
+      /scheme/,
+    );
+    expect(portMappingProblem({ scheme: "tcp", host: 0, container: 80 }, false)).toMatch(
+      /Ports/,
+    );
   });
 });

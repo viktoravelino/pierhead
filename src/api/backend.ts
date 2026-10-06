@@ -216,7 +216,8 @@ const lastLine = (output: string) =>
 
 /**
  * Runs an operation. Quick ones resolve with Dokku's output once it is done; ones that
- * redeploy answer with an event stream, whose lines go to `onLine` as they arrive. Either
+ * redeploy answer with an event stream, whose lines go to `onLine` as they arrive, and
+ * `onStream` fires once the headers say so (a refusal before that is an ordinary error). Either
  * way it resolves with the last line of output and throws an `ApiError` when the server
  * refused, Dokku failed or the stream broke. Not an `EventSource` (those only GET), and
  * nothing here aborts: the server finishes a deploy even if this tab goes away.
@@ -224,6 +225,7 @@ const lastLine = (output: string) =>
 export async function postOperation(
   req: OperationRequest,
   onLine: (line: string) => void,
+  onStream: () => void,
 ) {
   // Not `backend.…$post()`: the route also answers with an event stream, which erases the
   // JSON body types from the client.
@@ -238,6 +240,7 @@ export async function postOperation(
     return lastLine(body.output);
   }
   if (!res.body) throw new ApiError(res.status, "unexpected", "Empty response.");
+  onStream();
   let last: string | undefined;
   for await (const { event, data } of readEvents(res.body)) {
     if (event === "output") {
