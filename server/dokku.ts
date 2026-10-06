@@ -48,8 +48,8 @@ const globalReport = (plugin: string) => () => [
 ];
 
 /**
- * Dokku over SSH. Every command pierhead may run is listed in `commands` (read-only);
- * each entry turns typed args into the argv sent after `dokku@host`. Adding one is one
+ * Dokku over SSH. Every command pierhead may run is listed in `commands` (reads, then the
+ * writes the routes gate behind `PIERHEAD_ALLOW_WRITES`); each entry turns typed args into the argv sent after `dokku@host`. Adding one is one
  * line, e.g. `"ps:report": (app: string) => ["ps:report", appArg(app), "--format", "json"]`.
  * sshd joins the remote argv with spaces, so validate free-form args (app names) first.
  */
