@@ -1,7 +1,10 @@
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { ArrowRight, X } from "lucide-react";
 import type { OperationRequest } from "../../../shared/operations";
 import type { NetworkAttachment, PortMapping } from "../../../shared/types";
 import type { AppView } from "../../api/client";
+import { servicesQuery } from "../../api/queries";
 import { DomainLink } from "../../components/DomainLink";
 import {
   OperationButton,
@@ -9,7 +12,7 @@ import {
   textButton,
 } from "../../components/OperationButton";
 import { Signal } from "../../components/Signal";
-import { EmptyNote, Mono, Panel } from "../../components/ui";
+import { EmptyNote, ErrorNote, Mono, Panel, Skeleton } from "../../components/ui";
 
 function Command({ children }: { children: string }) {
   return (
@@ -33,6 +36,109 @@ const setMapping = ({ scheme, host, container }: PortMapping): PortMapping => ({
   host,
   container,
 });
+
+/** The datastore services linked to the app, with unlink, and the picker to link another. */
+function ServicesPanel({ app }: { app: AppView }) {
+  const {
+    data: groups = [],
+    isPending,
+    error,
+    isFetching,
+    refetch,
+  } = useQuery(servicesQuery);
+  const all = groups.flatMap((g) => g.services);
+  const unlinked = all.filter((s) => !s.apps.includes(app.name));
+  const noneInstalled = groups.length === 0;
+  return (
+    <Panel
+      title="Services"
+      action={
+        <OperationButton
+          app={app}
+          request={{
+            op: "service:link",
+            type: "",
+            name: "",
+            app: app.name,
+            restart: true,
+          }}
+          disabledReason={
+            isPending
+              ? "Loading the services..."
+              : error
+                ? "The services could not be read."
+                : noneInstalled
+                  ? "No service plugin is installed on the host."
+                  : unlinked.length === 0
+                    ? "Every service is already linked."
+                    : undefined
+          }
+          label="Link a service"
+          className={textButton}
+        >
+          Link a service
+        </OperationButton>
+      }
+    >
+      {error ? (
+        <ErrorNote error={error} onRetry={() => void refetch()} retrying={isFetching} />
+      ) : isPending ? (
+        <Skeleton className="m-4 h-10" />
+      ) : app.services.length > 0 ? (
+        <ul className="divide-y divide-line">
+          {app.services.map(({ type, name }) => (
+            <li
+              key={`${type}:${name}`}
+              className="flex items-center justify-between gap-3 px-4 py-2.5"
+            >
+              <span className="flex min-w-0 items-baseline gap-2">
+                <Link
+                  to="/services"
+                  className="truncate font-mono hover:text-accent hover:underline"
+                >
+                  {name}
+                </Link>
+                <span className="text-xs text-faint">{type}</span>
+              </span>
+              <OperationButton
+                app={app}
+                request={{
+                  op: "service:unlink",
+                  type,
+                  name,
+                  app: app.name,
+                  restart: true,
+                }}
+                label={`Unlink ${name}`}
+                className={removeButton}
+              >
+                <X className="size-4" aria-hidden="true" />
+              </OperationButton>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <EmptyNote>
+          {noneInstalled
+            ? "No service plugin is installed on the host."
+            : "No service is linked to this app."}
+        </EmptyNote>
+      )}
+      {app.partial?.includes("services") && (
+        <p className="border-t border-line px-4 py-2.5 text-xs text-warn">
+          Could not read every service plugin, so this list may be incomplete.
+        </p>
+      )}
+      <p className="border-t border-line px-4 py-2.5 text-xs text-faint">
+        Linking sets the service's URL as a config var (DATABASE_URL, REDIS_URL...) and
+        restarts a running app unless you opt out.
+      </p>
+      {groups.map((g) => (
+        <Command key={g.type}>{`dokku ${g.type}:app-links ${app.name}`}</Command>
+      ))}
+    </Panel>
+  );
+}
 
 export function NetworkTab({ app }: { app: AppView }) {
   const { proxyRestore } = app;
@@ -320,6 +426,8 @@ export function NetworkTab({ app }: { app: AppView }) {
         </p>
         <Command>{`dokku network:report ${app.name}`}</Command>
       </Panel>
+
+      <ServicesPanel app={app} />
     </div>
   );
 }

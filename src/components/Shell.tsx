@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import {
   Activity,
+  Database,
   FlaskConical,
   LayoutGrid,
   Moon,
@@ -54,6 +55,12 @@ const nav = [
     to: "/networks",
     Icon: Network,
     isActive: (p: string) => p.startsWith("/networks"),
+  },
+  {
+    label: "Services",
+    to: "/services",
+    Icon: Database,
+    isActive: (p: string) => p.startsWith("/services"),
   },
   {
     label: "Activity",
@@ -146,9 +153,9 @@ export function Shell() {
               <div>
                 {dataSource === "api" ? (
                   <p>
-                    Live from Dokku: apps, networks, host settings, logs and config. Live
-                    from Glances: host CPU, memory and disk, when configured. Actions and
-                    config changes run on Dokku when the server allows writes.
+                    Live from Dokku: apps, networks, services, host settings, logs and
+                    config. Live from Glances: host CPU, memory and disk, when configured.
+                    Actions and config changes run on Dokku when the server allows writes.
                   </p>
                 ) : (
                   <p>Design preview. All data is mocked; nothing reaches the host.</p>

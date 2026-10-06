@@ -4,7 +4,7 @@ import { CircleAlert, CircleCheck, Hammer, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { isOperationId } from "../../shared/operations";
 import type { Activity } from "../../shared/types";
-import { operationUi } from "../api/operations";
+import { exportUi, operationUi } from "../api/operations";
 import { activityQuery, appsQuery } from "../api/queries";
 import { formatDuration, relativeTime } from "../lib/time";
 import { EmptyNote, ErrorNote, Mono, Skeleton } from "./ui";
@@ -27,9 +27,19 @@ function operationText(
   a: Extract<Activity, { kind: "operation" }>,
   appRef: AppRef,
 ): ReactNode {
-  // Network operations have no app, so their target is not a link.
-  const target = a.app === null ? <Mono>{a.target}</Mono> : appRef(a.app);
-  const known = isOperationId(a.op) ? operationUi[a.op] : null;
+  // Network operations have no app, so their target is not a link; a service operation's
+  // target is the service, whatever app a link names.
+  const target =
+    a.app === null || a.op.startsWith("service:") ? (
+      <Mono>{a.target}</Mono>
+    ) : (
+      appRef(a.app)
+    );
+  const known = isOperationId(a.op)
+    ? operationUi[a.op]
+    : a.op === "service:export"
+      ? exportUi
+      : null;
   const label = known?.label ?? a.op;
   const [before = "", ...after] = (known?.done ?? `${a.op} {target}.`).split("{target}");
   switch (a.outcome) {
@@ -39,6 +49,12 @@ function operationText(
           {before}
           {target}
           {after.join("{target}").replace(/\.$/, "")}
+          {(a.op === "service:link" || a.op === "service:unlink") && a.app && (
+            <>
+              {a.op === "service:link" ? " to " : " from "}
+              {appRef(a.app)}
+            </>
+          )}
           {a.op.startsWith("config:") && a.message && (
             <span className="text-dim">
               {" "}

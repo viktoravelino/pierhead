@@ -26,6 +26,7 @@ import type {
   LogEndEvent,
   LogEvent,
   Network,
+  ServiceGroup,
   StorageMount,
 } from "../../shared/types";
 import {
@@ -42,21 +43,27 @@ import {
   fetchHostDetails,
   fetchHostMetrics,
   fetchNetworks,
+  fetchServiceDsn,
+  fetchServices,
   fetchStorageUsers,
   postOperation,
   putConfigVar,
   streamLogs,
+  streamServiceLogs,
 } from "./backend";
 import {
   activity,
   backup,
   hostDetails,
   type LogProfile,
+  mockDsn,
+  mockServiceLog,
   networks,
   type RawApp,
   rawApps,
   rawLogLine,
   sampleConfig,
+  serviceGroups,
   wave,
 } from "./mock-data";
 
@@ -126,6 +133,11 @@ function toApp(raw: RawApp): AppView {
     git: { deployBranch: null, computedDeployBranch: null, sourceImage: null },
     resources: [],
     storage: [],
+    services: serviceGroups.flatMap((g) =>
+      g.services
+        .filter((svc) => svc.apps.includes(raw.name))
+        .map(({ type, name }) => ({ type, name })),
+    ),
     sample: { summary: raw.summary, lastDeploy },
   };
 }
@@ -238,6 +250,22 @@ export const getStorageUsers: () => Promise<{ app: string; mounts: StorageMount[
 export const getHostDetails: () => Promise<HostDetails> =
   dataSource === "api" ? fetchHostDetails : mockHostDetails;
 
+const mockServices = async () => {
+  await latency();
+  return serviceGroups;
+};
+
+/** Every installed service plugin with its services (the mock's operations change none of it). */
+export const getServices: () => Promise<ServiceGroup[]> =
+  dataSource === "api" ? fetchServices : mockServices;
+
+/** A service's connection string. Fetched only when the user reveals it and never cached. */
+export async function getServiceDsn(type: string, name: string) {
+  if (dataSource === "api") return fetchServiceDsn(type, name);
+  await latency();
+  return mockDsn(type, name);
+}
+
 const mockActivity = async (app?: string) => {
   await latency();
   return app === undefined ? activity : activity.filter((a) => a.app === app);
@@ -306,6 +334,34 @@ const mockLogs = (app: AppView, { onLines, onEnd }: LogHandlers) => {
  */
 export const subscribeToLogs: (app: AppView, handlers: LogHandlers) => () => void =
   dataSource === "api" ? (app, handlers) => streamLogs(app.name, handlers) : mockLogs;
+
+/** Streams a service's recent log, then new lines as they arrive; same contract as `subscribeToLogs`. */
+export function subscribeToServiceLogs(
+  type: string,
+  name: string,
+  { onLines, onEnd }: LogHandlers,
+) {
+  if (dataSource === "api") return streamServiceLogs(type, name, { onLines, onEnd });
+  let stopped = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  latency().then(() => {
+    if (stopped) return;
+    const now = Date.now();
+    onLines(
+      Array.from({ length: 12 }, (_, i) =>
+        parseLogEvent(mockServiceLog(type, name, new Date(now - (12 - i) * 60_000))),
+      ),
+    );
+    timer = setInterval(
+      () => onLines([parseLogEvent(mockServiceLog(type, name, new Date()))]),
+      4000,
+    );
+  });
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
 
 /**
  * Runs an operation. In "api" mode it executes on the host and resolves once Dokku is

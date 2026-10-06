@@ -14,11 +14,15 @@ import {
   isNetworkName,
   isNewAppName,
   isNewProcessType,
+  isNewServiceName,
   isProcessCount,
   isRepoPath,
   isSafeArg,
   isSafeContainerPath,
   isSafeDomain,
+  isServiceName,
+  isServiceType,
+  isServiceVersion,
   isStorageName,
   parsePortMapping,
   portMappingProblem,
@@ -412,6 +416,83 @@ describe("git URLs and refs", () => {
       "a/.hidden",
     ]) {
       expect(isGitRef(ref)).toBe(false);
+    }
+  });
+});
+
+describe("service types and names", () => {
+  test("a type is one short lowercase word, the namespace of a command", () => {
+    for (const type of ["postgres", "redis", "mysql", "rabbit-mq", "pg"]) {
+      expect(isServiceType(type)).toBe(true);
+    }
+    for (const type of [
+      "",
+      "p",
+      "Post gres",
+      "Postgres",
+      "post gres",
+      "postgres:create",
+      "-postgres",
+      "1pg",
+      "pg_x",
+      "a".repeat(22),
+      "../etc",
+    ]) {
+      expect(isServiceType(type)).toBe(false);
+    }
+  });
+
+  test("a new service is lowercase with inner hyphens, 2 to 40 characters", () => {
+    for (const name of ["hello-db", "ab", "a1", "x".repeat(40)]) {
+      expect(isNewServiceName(name)).toBe(true);
+    }
+    for (const name of [
+      "",
+      "a",
+      "Hello",
+      "hello_db",
+      "-db",
+      "db-",
+      "1db",
+      "a b",
+      "x".repeat(41),
+    ]) {
+      expect(isNewServiceName(name)).toBe(false);
+    }
+  });
+
+  test("an existing service may be anything Dokku accepted but a flag", () => {
+    for (const name of ["Bad_Name", "a", "db_1", "hello-db", "_x"]) {
+      expect(isServiceName(name)).toBe(true);
+    }
+    for (const name of [
+      "",
+      "-f",
+      "--force",
+      "a b",
+      "a;b",
+      "$(id)",
+      "a.b",
+      "x".repeat(64),
+    ]) {
+      expect(isServiceName(name)).toBe(false);
+    }
+  });
+
+  test("a version is an image tag that cannot be a flag", () => {
+    for (const version of ["16", "16-alpine", "2.30.1-pg18", "latest", "_x"]) {
+      expect(isServiceVersion(version)).toBe(true);
+    }
+    for (const version of [
+      "",
+      "-v",
+      "--force",
+      "16 alpine",
+      "16;ls",
+      "a:b",
+      "x".repeat(129),
+    ]) {
+      expect(isServiceVersion(version)).toBe(false);
     }
   });
 });

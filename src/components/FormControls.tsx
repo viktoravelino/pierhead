@@ -54,12 +54,15 @@ export function SelectField({
   value,
   options,
   hint,
+  focus = true,
   onChange,
 }: {
   label: string;
   value: string;
   options: { value: string; label: string }[];
   hint?: string;
+  /** Whether the field takes focus when the dialog opens; one per dialog. */
+  focus?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
@@ -67,7 +70,7 @@ export function SelectField({
       <span className="label">{label}</span>
       <select
         // biome-ignore lint/a11y/noAutofocus: the dialog exists to fill this field
-        autoFocus
+        autoFocus={focus}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={inputClass}

@@ -104,6 +104,9 @@ export type Revision = {
   updatedAt: string | null;
 };
 
+/** A service linked to an app, as `AppDetail.services` lists it. */
+export type ServiceLink = { type: string; name: string };
+
 type AppCommon = {
   name: string;
   status: AppStatus;
@@ -144,6 +147,8 @@ export type AppDetail = AppCommon & {
   git: GitSettings;
   resources: ResourceEntry[];
   storage: StorageMount[];
+  /** Datastore services linked to the app (`<type>:links`); filled by the server from the services read. */
+  services: ServiceLink[];
   /**
    * Settings reads that failed (their fields above are empty, not unset). Absent when
    * every read worked.
@@ -371,7 +376,7 @@ export type OperationRecord = {
   message: string;
   /** Rename and clone only: the name the app was renamed or cloned to (`app` is null for them). */
   newName?: string;
-  /** Config changes only: whether it restarted (redeployed) the app, which is what leaves a Dokku build record. */
+  /** Config changes and service link or unlink: whether it restarted (redeployed) the app, which is what leaves a Dokku build record. */
   restart?: boolean;
 };
 
@@ -405,4 +410,45 @@ export type BackupStatus = {
     snapshot: string;
   };
   nextRunAt: string;
+};
+
+/** `running` is a container Docker reports up; `stopped` one that is gone or exited (Dokku says `missing`). */
+export type ServiceStatus = "running" | "stopped" | "unknown";
+
+/**
+ * One datastore service (`<type>:info`). No field holds a password: the connection string
+ * is only ever read on request (`GET /api/services/:type/:name/dsn`) and shows here masked.
+ */
+export type Service = {
+  /** The plugin: `postgres`, `redis`... */
+  type: string;
+  name: string;
+  status: ServiceStatus;
+  /** The image and tag the container runs, e.g. `redis:8.10.1`. */
+  version: string;
+  image: string;
+  imageVersion: string;
+  /** Apps linked to it. */
+  apps: string[];
+  /** Host ports it is exposed on; empty while it is not. */
+  exposedPorts: string[];
+  dataDir: string;
+  configDir: string;
+  /** Null while the container does not exist (stopped). */
+  containerId: string | null;
+  internalIp: string | null;
+  /** `scheme://user:********@host:port/db`, or null when Dokku gave none or one in an unknown form. */
+  maskedDsn: string | null;
+  /** The same for the exposed connection string, if it is exposed. */
+  maskedExposedDsn: string | null;
+  /** Dokku's own scheduled S3 backup (`<type>:backup-schedule`), if one is set; unrelated to the lab backup. */
+  backupSchedule: string | null;
+};
+
+/** The services of one installed service plugin. `error` is why its read failed (then `services` is empty). */
+export type ServiceGroup = {
+  type: string;
+  pluginVersion: string;
+  services: Service[];
+  error?: string;
 };

@@ -17,12 +17,16 @@ import {
   isNetworkName,
   isNewAppName,
   isNewProcessType,
+  isNewServiceName,
   isProcessCount,
   isProcessType,
   isRepoPath,
   isSafeArg,
   isSafeContainerPath,
   isSafeDomain,
+  isServiceName,
+  isServiceType,
+  isServiceVersion,
   isStorageName,
   maxProcessCount,
   networkAttachments,
@@ -36,6 +40,7 @@ import type {
   NetworkAttachment,
   PortMapping,
   ResourceKind,
+  Service,
 } from "./types";
 
 // Every write the server runs for the UI is a row of the `operations` table below: the
@@ -126,6 +131,16 @@ type OperationArgs = {
     containerPath: string;
     confirm: string;
   };
+  /** `type` is an installed service plugin (`postgres`); a blank `version` is the plugin's default image tag. */
+  "service:create": { type: string; name: string; version: string };
+  /** `confirm` is the service's name, typed by the user. Destroys its data. */
+  "service:destroy": { type: string; name: string; confirm: string };
+  /** Sets the service's URL on the app; restarts the app unless `restart` is false. */
+  "service:link": { type: string; name: string; app: string; restart: boolean };
+  "service:unlink": { type: string; name: string; app: string; restart: boolean };
+  "service:start": { type: string; name: string };
+  "service:stop": { type: string; name: string };
+  "service:restart": { type: string; name: string };
 };
 
 export type OperationId = keyof OperationArgs;
@@ -134,6 +149,14 @@ type Of<K extends OperationId> = { op: K } & OperationArgs[K];
 
 /** What `POST /api/operations/:op` accepts; narrow on `op`. */
 export type OperationRequest = { [K in OperationId]: Of<K> }[OperationId];
+
+/** The operations on a datastore service rather than an app. */
+export type ServiceOperationId = Extract<OperationId, `service:${string}`>;
+export type ServiceRequest = Extract<OperationRequest, { op: ServiceOperationId }>;
+
+/** Whether a request acts on a datastore service rather than an app, a network or the host settings. */
+export const isServiceRequest = (req: OperationRequest): req is ServiceRequest =>
+  req.op.startsWith("service:");
 
 export type Availability = { ok: true } | { ok: false; reason: string };
 
@@ -349,6 +372,44 @@ const resourceValue = (
 };
 
 const step = (...argv: string[]) => argv;
+
+const serviceType = (body: unknown) => {
+  const type = fields(body).string("type");
+  return isServiceType(type)
+    ? type
+    : refuse(`Invalid service type: ${JSON.stringify(type)}`);
+};
+
+/** The name of a service that exists: anything Dokku could have stored, as long as it is one safe word. */
+const serviceName = (body: unknown) => {
+  const name = fields(body).string("name");
+  return isServiceName(name)
+    ? name
+    : refuse(`Invalid service name: ${JSON.stringify(name)}`);
+};
+
+/** `{ type, name }` for the operation `op`. */
+const serviceBody = <K extends OperationId>(op: K) =>
+  parseBody((body) => ({ op, type: serviceType(body), name: serviceName(body) }));
+
+/** `{ type, name, app, restart }`: the link and unlink of a service and an app. */
+const linkBody = <K extends OperationId>(op: K) =>
+  parseBody((body) => ({
+    op,
+    type: serviceType(body),
+    name: serviceName(body),
+    app: appName(body),
+    restart: fields(body).flag("restart"),
+  }));
+
+/** Linking or unlinking restarts a running app unless told not to, which is a deploy to watch. */
+const restartsApp = (
+  { restart }: { restart: boolean },
+  app: Pick<AppSummary, "status"> | null,
+) => restart && (app?.status.kind === "running" || app?.status.kind === "crashed");
+
+/** `--no-restart` unless the app should restart. */
+const restartFlag = (restart: boolean) => (restart ? [] : ["--no-restart"]);
 
 /** `ps:rebuild` as a last step, for settings that only apply on the next deploy. */
 const thenRebuild = (app: string, rebuild: boolean) =>
@@ -819,6 +880,76 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
     }),
     availability: unlessDeploying(),
   },
+  "service:create": {
+    parse: parseBody((body) => {
+      const name = fields(body).string("name");
+      const version = fields(body).optionalString("version") ?? "";
+      if (!isNewServiceName(name)) {
+        return refuse(
+          "Use lowercase letters, digits and hyphens, starting with a letter, 2 to 40 characters.",
+        );
+      }
+      return version === "" || isServiceVersion(version)
+        ? { op: "service:create", type: serviceType(body), name, version }
+        : refuse(
+            "The version is an image tag: letters, digits, dots, underscores and hyphens.",
+          );
+    }),
+    // Pulls the image on first use (about a minute for postgres) and prints the service's
+    // info, which carries the password; the server masks it.
+    commands: ({ type, name, version }) => [
+      step(
+        `${type}:create`,
+        name,
+        ...(version === "" ? [] : ["--image-version", version]),
+      ),
+    ],
+    streams: true,
+  },
+  "service:destroy": {
+    parse: parseBody((body) => ({
+      op: "service:destroy",
+      type: serviceType(body),
+      name: serviceName(body),
+      confirm: fields(body).string("confirm"),
+    })),
+    // Without --force Dokku prompts for the name and fails without a tty; the typed name is
+    // checked by `destructive`. Dokku itself refuses while an app is linked.
+    commands: ({ type, name }) => [step(`${type}:destroy`, name, "--force")],
+    streams: false,
+    destructive: ({ name, confirm }) => ({ typed: confirm, expected: name }),
+  },
+  "service:link": {
+    parse: linkBody("service:link"),
+    commands: ({ type, name, app, restart }) => [
+      step(`${type}:link`, name, app, ...restartFlag(restart)),
+    ],
+    streams: restartsApp,
+    availability: unlessDeploying(),
+  },
+  "service:unlink": {
+    parse: linkBody("service:unlink"),
+    commands: ({ type, name, app, restart }) => [
+      step(`${type}:unlink`, name, app, ...restartFlag(restart)),
+    ],
+    streams: restartsApp,
+    availability: unlessDeploying(),
+  },
+  "service:start": {
+    parse: serviceBody("service:start"),
+    commands: ({ type, name }) => [step(`${type}:start`, name)],
+    streams: false,
+  },
+  "service:stop": {
+    parse: serviceBody("service:stop"),
+    commands: ({ type, name }) => [step(`${type}:stop`, name)],
+    streams: false,
+  },
+  "service:restart": {
+    parse: serviceBody("service:restart"),
+    commands: ({ type, name }) => [step(`${type}:restart`, name)],
+    streams: false,
+  },
 };
 
 export const isOperationId = (value: string): value is OperationId =>
@@ -854,10 +985,11 @@ export const appOf = (req: OperationRequest) =>
   "app" in req && !("newName" in req) ? req.app : null;
 
 /**
- * What the request is about, for toasts and the log: its app, a network, `old -> new` for
+ * What the request is about, for toasts and the log: its app, a service, a network, `old -> new` for
  * a rename or clone, or what a global setting is set to (`default` for a cleared branch).
  */
 export function targetOf(req: OperationRequest) {
+  if ("type" in req) return req.name;
   if ("newName" in req) return `${req.app} -> ${req.newName}`;
   if ("app" in req) return req.app;
   if ("network" in req) return req.network;
@@ -869,10 +1001,13 @@ export function targetOf(req: OperationRequest) {
 export type Invalidation =
   | { kind: "apps"; apps: string[] }
   | { kind: "networks" }
+  /** The services read, and the apps a link or unlink changes. */
+  | { kind: "services"; apps: string[] }
   /** The host settings and every app, since defaults derive from them. */
   | { kind: "host" };
 
 export function invalidationOf(req: OperationRequest): Invalidation {
+  if ("type" in req) return { kind: "services", apps: "app" in req ? [req.app] : [] };
   if ("newName" in req) return { kind: "apps", apps: [req.app, req.newName] };
   if ("app" in req) return { kind: "apps", apps: [req.app] };
   if ("network" in req) return { kind: "networks" };
@@ -902,3 +1037,42 @@ export const operationAvailability = (op: OperationId, app: AppState): Availabil
 
 /** A rebuild's (or any streamed operation's) SSE event: one line of Dokku output, ANSI stripped. */
 export type OperationOutputEvent = { line: string };
+
+/** The part of a service that decides whether an operation on it makes sense. */
+export type ServiceState = Pick<Service, "status" | "apps">;
+
+/**
+ * Whether a service operation fits the service's state; `reason` explains a no. Create has
+ * no service yet, and the app a link needs is checked by the server against its own state.
+ */
+export function serviceAvailability(
+  req: ServiceRequest,
+  service: ServiceState,
+): Availability {
+  switch (req.op) {
+    case "service:start":
+      return service.status === "running" ? unavailable("Already running.") : available;
+    case "service:stop":
+      return service.status === "stopped" ? unavailable("Already stopped.") : available;
+    case "service:restart":
+      return service.status === "stopped"
+        ? unavailable("Stopped. Start it instead.")
+        : available;
+    case "service:destroy":
+      return service.apps.length > 0
+        ? unavailable(
+            `Still linked to ${service.apps.join(", ")}. Unlink it there first.`,
+          )
+        : available;
+    case "service:link":
+      return service.apps.includes(req.app)
+        ? unavailable(`Already linked to ${req.app}.`)
+        : available;
+    case "service:unlink":
+      return service.apps.includes(req.app)
+        ? available
+        : unavailable(`Not linked to ${req.app}.`);
+    case "service:create":
+      return available;
+  }
+}

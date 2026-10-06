@@ -80,6 +80,7 @@ export const cacheKeys = {
   list: "apps",
   networks: "networks",
   storage: "storage",
+  services: "services",
   host: "host",
   app: (name: string) => `app:${name}`,
   config: (name: string) => `config:${name}`,

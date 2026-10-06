@@ -438,6 +438,8 @@ export function parseAppDetail(name: string, r: DetailReports): AppDetail {
     git: parseGitSettings(r.git),
     resources: parseResources(r.resource),
     storage: parseStorage(r.storage),
+    // The server adds them from its services read; Dokku's app reports do not list them.
+    services: [],
   };
 }
 
@@ -500,6 +502,16 @@ const ansi = /\u001b\[[0-9;]*[A-Za-z]/g;
 
 /** Drops colour/cursor codes and the pty's trailing carriage return from one output line. */
 export const stripAnsi = (raw: string) => raw.replace(ansi, "").replace(/\r$/, "");
+
+/**
+ * The text of a raw output line when it can say why a command failed: ANSI and the leading
+ * ` !` marker stripped, and null for a blank line or one that is only Dokku's ` !` marker (a failed command often
+ * ends with one on its own).
+ */
+export function reasonLine(raw: string) {
+  const text = stripAnsi(raw).trim();
+  return text === "" || /^!+$/.test(text) ? null : text.replace(/^!\s+/, "");
+}
 
 /**
  * One raw `dokku logs` line: `<ESC>[36m2026-10-05T21:13:59.305Z app[web.1]:<ESC>[0m message`

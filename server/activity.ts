@@ -31,11 +31,19 @@ const slackMs = 10_000;
 
 const startMs = (iso: string) => Date.parse(iso);
 
-/** A config change leaves a record only when it restarted the app (`--no-restart` leaves none). */
+/**
+ * Operations that restart the app only when asked (`--no-restart` leaves no record): a
+ * config change, and linking or unlinking a service (it sets or unsets the app's URL).
+ */
+const restartsOnRequest: ReadonlySet<string> = new Set([
+  "config:set",
+  "config:unset",
+  "service:link",
+  "service:unlink",
+]);
+
 const startsRecords = (op: OperationRecord) =>
-  op.op === "config:set" || op.op === "config:unset"
-    ? op.restart === true
-    : deploying.has(op.op);
+  restartsOnRequest.has(op.op) ? op.restart === true : deploying.has(op.op);
 
 /** Whether `record` began while `op` ran, on the same app (the new one for a rename or clone), and `op` is one that deploys. */
 function caused(op: OperationRecord, app: string, record: BuildRecord) {

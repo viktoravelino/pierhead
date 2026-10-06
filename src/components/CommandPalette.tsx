@@ -5,8 +5,10 @@ import {
   Box,
   Copy,
   CornerDownLeft,
+  Database,
   Hammer,
   LayoutGrid,
+  Link2,
   Network,
   Pencil,
   Play,
@@ -24,8 +26,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { serviceAvailability } from "../../shared/operations";
 import { operationAvailability, operationUi, psOperationIds } from "../api/operations";
-import { appsQuery } from "../api/queries";
+import { appsQuery, servicesQuery } from "../api/queries";
 import { useRequestOperation, useWrites } from "./OperationHost";
 import { Kbd } from "./ui";
 
@@ -44,9 +47,22 @@ const psIcon = {
   "ps:stop": <Square className="size-4" aria-hidden="true" />,
 } as const satisfies Record<(typeof psOperationIds)[number], ReactNode>;
 
+const serviceStateIcon = {
+  "service:start": <Play className="size-4" aria-hidden="true" />,
+  "service:stop": <Square className="size-4" aria-hidden="true" />,
+  "service:restart": <RotateCw className="size-4" aria-hidden="true" />,
+} as const;
+
+const serviceStateOps = [
+  "service:start",
+  "service:stop",
+  "service:restart",
+] as const satisfies readonly (keyof typeof serviceStateIcon)[];
+
 const pages = [
   { label: "Apps", to: "/", Icon: LayoutGrid },
   { label: "Networks", to: "/networks", Icon: Network },
+  { label: "Services", to: "/services", Icon: Database },
   { label: "Activity", to: "/activity", Icon: Activity },
   { label: "Host", to: "/host", Icon: Server },
 ] as const;
@@ -67,6 +83,7 @@ export function CommandPalette({
   const requestOperation = useRequestOperation();
   const writes = useWrites();
   const { data: apps = [] } = useQuery(appsQuery);
+  const { data: groups = [] } = useQuery(servicesQuery);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -143,6 +160,56 @@ export function CommandPalette({
             },
           ]
         : [],
+    ),
+    // The dialogs ask for the name, or the app to link.
+    ...(writes.enabled && groups.length > 0
+      ? [
+          {
+            id: "service-create",
+            group: "Run" as const,
+            label: "Create service",
+            icon: <Database className="size-4" aria-hidden="true" />,
+            run: () =>
+              requestOperation({
+                op: "service:create",
+                type: groups[0]?.type ?? "",
+                name: "",
+                version: "",
+              }),
+          },
+        ]
+      : []),
+    ...groups.flatMap((group) =>
+      group.services.flatMap((service) => {
+        if (!writes.enabled) return [];
+        const { type, name } = service;
+        return [
+          ...serviceStateOps
+            .map((op) => ({ op, type, name }))
+            .filter((req) => serviceAvailability(req, service).ok)
+            .map((req) => ({
+              id: `${req.op}-${type}-${name}`,
+              group: "Run" as const,
+              label: `${operationUi[req.op].label} service ${name}`,
+              icon: serviceStateIcon[req.op],
+              run: () => requestOperation(req),
+            })),
+          {
+            id: `service-link-${type}-${name}`,
+            group: "Run" as const,
+            label: `Link service ${name} to an app`,
+            icon: <Link2 className="size-4" aria-hidden="true" />,
+            run: () =>
+              requestOperation({
+                op: "service:link",
+                type,
+                name,
+                app: "",
+                restart: true,
+              }),
+          },
+        ];
+      }),
     ),
     ...apps.flatMap((app) =>
       (writes.enabled ? psOperationIds : [])

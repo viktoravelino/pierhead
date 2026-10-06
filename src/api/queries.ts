@@ -13,6 +13,7 @@ import {
   getHostDetails,
   getHostMetrics,
   getNetworks,
+  getServices,
   getStorageUsers,
 } from "./client";
 
@@ -44,6 +45,11 @@ export const backupQuery = queryOptions({ queryKey: ["backup"], queryFn: getBack
 export const networksQuery = queryOptions({
   queryKey: ["networks"],
   queryFn: getNetworks,
+  ...poll,
+});
+export const servicesQuery = queryOptions({
+  queryKey: ["services"],
+  queryFn: getServices,
   ...poll,
 });
 export const storageUsersQuery = queryOptions({

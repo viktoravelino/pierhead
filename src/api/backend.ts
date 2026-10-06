@@ -2,6 +2,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { hc, type InferResponseType } from "hono/client";
 import type { AppType } from "../../server/index";
 import type { OperationOutputEvent, OperationRequest } from "../../shared/operations";
+import { reasonLine } from "../../shared/parse";
 import type { LogEndEvent, LogEvent } from "../../shared/types";
 import type { LogHandlers } from "./client";
 
@@ -83,6 +84,53 @@ export async function fetchStorageUsers() {
   return body.apps;
 }
 
+/** Every installed service plugin with its services; no connection string in it. */
+export async function fetchServices() {
+  const res = await backend.api.services.$get();
+  const body = await res.json();
+  if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
+  return body.groups;
+}
+
+/** A service's connection string, with its password; only called when the user asks to reveal it. */
+export async function fetchServiceDsn(type: string, name: string) {
+  const res = await backend.api.services[":type"][":name"].dsn.$get({
+    param: { type, name },
+  });
+  const body = await res.json();
+  if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
+  return body.dsn;
+}
+
+/**
+ * Exports a service and saves the dump through the browser. A POST with a custom header
+ * (the server refuses a bare cross-site request) whose body is held in memory as a blob,
+ * so a failure is an error here and never a half-written file.
+ */
+export async function downloadServiceExport(type: string, name: string) {
+  // Not `jsonOrUnreachable`: a dump is not JSON, and that wrapper would call it unreachable.
+  const res = await fetch(`/api/services/${encoded(type)}/${encoded(name)}/export`, {
+    method: "POST",
+    headers: { "X-Pierhead-Request": "export" },
+  });
+  if (!res.ok) {
+    const body: ApiFailure | null = await res.json().catch(() => null);
+    throw new ApiError(
+      res.status,
+      body?.error.kind ?? "unreachable",
+      body?.error.message ??
+        `The backend answered HTTP ${res.status} without a JSON body.`,
+    );
+  }
+  const file =
+    /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ??
+    `${name}.dump`;
+  const url = URL.createObjectURL(await res.blob());
+  const link = Object.assign(document.createElement("a"), { href: url, download: file });
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function fetchHostDetails() {
   const res = await backend.api.host.$get();
   const body = await res.json();
@@ -139,16 +187,13 @@ export async function fetchDokku() {
 const logTail = 500;
 
 /**
- * Follows an app's logs over SSE (`GET /api/apps/:name/logs`). Any end of the stream,
- * clean or not, calls `onEnd` once and closes the connection: an `EventSource` would
- * otherwise reconnect by itself and replay the history. Returns an unsubscribe, which
- * closes the connection; the server then kills its ssh child.
+ * Follows a log stream over SSE. Any end of the stream, clean or not, calls `onEnd` once
+ * and closes the connection: an `EventSource` would otherwise reconnect by itself and
+ * replay the history. Returns an unsubscribe, which closes the connection; the server then
+ * kills its ssh child.
  */
-export function streamLogs(name: string, { onLines, onEnd }: LogHandlers) {
-  // Not `backend.….$url()`: that needs an absolute base, and ours is relative (proxied).
-  const source = new EventSource(
-    `/api/apps/${encodeURIComponent(name)}/logs?tail=${logTail}`,
-  );
+function followLogs(url: string, { onLines, onEnd }: LogHandlers) {
+  const source = new EventSource(url);
   const finish = (end: LogEndEvent) => {
     source.close();
     onEnd(end);
@@ -169,6 +214,20 @@ export function streamLogs(name: string, { onLines, onEnd }: LogHandlers) {
     finish({ kind: "failed", message: "Lost the connection to the log stream." });
   return () => source.close();
 }
+
+// Not `backend.….$url()`: that needs an absolute base, and ours is relative (proxied).
+const encoded = encodeURIComponent;
+
+/** Follows an app's logs (`GET /api/apps/:name/logs`). */
+export const streamLogs = (name: string, handlers: LogHandlers) =>
+  followLogs(`/api/apps/${encoded(name)}/logs?tail=${logTail}`, handlers);
+
+/** Follows a service's logs (`GET /api/services/:type/:name/logs`). */
+export const streamServiceLogs = (type: string, name: string, handlers: LogHandlers) =>
+  followLogs(
+    `/api/services/${encoded(type)}/${encoded(name)}/logs?tail=${logTail}`,
+    handlers,
+  );
 
 /** What the operations route answers with, bar the event stream. */
 type OperationBody = { ok: true; output: string } | { ok: false; error: ApiErrorBody };
@@ -244,12 +303,9 @@ async function* readEvents(source: ReadableStream<Uint8Array>) {
   }
 }
 
-/** The last non-empty line of Dokku's output, which says how the command ended. */
+/** The last line that says something, which says how the command ended (not a lone ` !` marker). */
 const lastLine = (output: string) =>
-  output
-    .split("\n")
-    .map((line) => line.trim())
-    .findLast(Boolean);
+  output.split("\n").map(reasonLine).findLast(Boolean) ?? undefined;
 
 /**
  * Runs an operation. Quick ones resolve with Dokku's output once it is done; ones that

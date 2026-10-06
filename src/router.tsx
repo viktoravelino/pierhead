@@ -10,6 +10,7 @@ import { AppPage, type AppTab, appTabs } from "./pages/AppPage";
 import { HostPage } from "./pages/HostPage";
 import { NetworksPage } from "./pages/NetworksPage";
 import { OverviewPage } from "./pages/OverviewPage";
+import { ServicesPage } from "./pages/ServicesPage";
 
 const rootRoute = createRootRoute({ component: Shell });
 
@@ -38,6 +39,12 @@ const networksRoute = createRoute({
   component: NetworksPage,
 });
 
+const servicesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/services",
+  component: ServicesPage,
+});
+
 const activityRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/activity",
@@ -63,6 +70,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   appRoute,
   networksRoute,
+  servicesRoute,
   activityRoute,
   hostRoute,
   settingsRoute,

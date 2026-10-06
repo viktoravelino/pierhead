@@ -1,11 +1,12 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, Copy, Eye, EyeOff, Pencil, Plus, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import type { ConfigKey } from "../../../shared/config";
 import { describeError } from "../../api/backend";
 import { type AppView, dataSource, getConfigValue } from "../../api/client";
 import { configQuery } from "../../api/queries";
 import { ConfigDialog, type ConfigDialogState } from "../../components/ConfigDialog";
+import { CopyButton, iconButton } from "../../components/CopyButton";
 import { useWrites, type Writes } from "../../components/OperationHost";
 import { EmptyNote, ErrorNote, Panel, Skeleton } from "../../components/ui";
 
@@ -33,31 +34,8 @@ function StubButton({ icon, label }: { icon: "edit" | "add"; label: string }) {
   );
 }
 
-const iconButton =
-  "grid size-8 place-items-center rounded-sm border border-line-strong text-dim hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-dim";
-
 const textButton =
   "flex h-8 items-center gap-1.5 rounded-sm border border-line-strong px-2.5 text-xs font-medium hover:bg-raised disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
-
-function CopyButton({ name, value }: { name: string; value: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        void navigator.clipboard.writeText(value).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        });
-      }}
-      aria-label={`Copy ${name}`}
-      title="Copy value"
-      className={iconButton}
-    >
-      {copied ? <Check className="size-3.5 text-ok" /> : <Copy className="size-3.5" />}
-    </button>
-  );
-}
 
 /**
  * One variable. Its value is fetched when Reveal is pressed and lives only in this row's
@@ -77,7 +55,11 @@ function ConfigRow({
   onUnset: (key: string) => void;
 }) {
   const { key, managed } = entry;
-  const reveal = useMutation({ mutationFn: () => getConfigValue(app, key) });
+  const reveal = useMutation({
+    mutationFn: () => getConfigValue(app, key),
+    // Not kept once hidden: the revealed value must not outlive the view.
+    gcTime: 0,
+  });
   const value = reveal.data;
   const revealed = value !== undefined;
   const writeReason = writes.enabled ? undefined : writes.reason;

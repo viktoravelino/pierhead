@@ -12,6 +12,7 @@ import type { DokkuError, DokkuResult, DokkuRun, DokkuSteps } from "./dokku";
 import {
   afterSuccess,
   failureRefusal,
+  failureText,
   preflight,
   restoreToSave,
   runSteps,
@@ -1041,5 +1042,330 @@ describe("preflight: global settings", () => {
     expect(
       await refusal(globalOp("domains:add-global", ["new.local"]), broken),
     ).toMatchObject({ status: 502, kind: "timeout" });
+  });
+});
+
+/** A host that also runs service plugins: what `plugin:list` and `<type>:info` would print. */
+type ServiceFixture = { status?: string; links?: string[] };
+
+function serviceHost(
+  base: DokkuRun,
+  services: Record<string, Record<string, ServiceFixture>>,
+  // Plugins that take `--image-version` on create.
+  { versioned = ["postgres", "redis"] }: { versioned?: string[] } = {},
+): DokkuRun {
+  const plugin = (name: string, description: string, core = false) => ({
+    name,
+    version: "2.2.0",
+    enabled: true,
+    core,
+    description,
+  });
+  return async (name, ...args) => {
+    const [type = "", service] = args.map(String);
+    switch (name) {
+      case "plugin:list":
+        return ok(
+          JSON.stringify([
+            plugin("apps", "dokku core apps plugin", true),
+            ...Object.keys(services).map((t) => plugin(t, `dokku ${t} service plugin`)),
+          ]),
+        );
+      case "service:info": {
+        const fixtures = services[type] ?? {};
+        if (service === undefined) return ok(JSON.stringify({ message: "none" }));
+        const found = fixtures[service];
+        if (!found) return fail(`service ${service} does not exist`);
+        return ok(
+          JSON.stringify({
+            service,
+            status: found.status ?? "running",
+            links: (found.links ?? []).join(","),
+            dsn: "postgres://postgres:secretpw@dokku-postgres-x:5432/x",
+          }),
+        );
+      }
+      case "service:create-help":
+        return ok(
+          versioned.includes(type) ? "-I|--image-version <string>" : "-i|--image",
+        );
+      default:
+        return base(name, ...args);
+    }
+  };
+}
+
+const withServices = serviceHost(host, {
+  postgres: {
+    "hello-db": { links: ["hello-multi"] },
+    "spare-db": {},
+    "off-db": { status: "missing" },
+  },
+  redis: { "hello-cache": {} },
+});
+
+describe("preflight: services", () => {
+  const pg = { type: "postgres", name: "hello-db" };
+
+  test("a type that is not an installed service plugin is a 400, for every operation", async () => {
+    const requests: OperationRequest[] = [
+      { op: "service:create", type: "mysql", name: "x-db", version: "" },
+      { op: "service:start", type: "mysql", name: "x-db" },
+      { op: "service:destroy", type: "mysql", name: "x-db", confirm: "x-db" },
+      { op: "service:link", type: "mysql", name: "x-db", app: "hello", restart: false },
+      // Core plugins are not service plugins either.
+      { op: "service:stop", type: "apps", name: "hello" },
+    ];
+    for (const req of requests) {
+      expect(await refusal(req, withServices)).toMatchObject({
+        status: 400,
+        kind: "unknown-type",
+      });
+    }
+  });
+
+  test("a service that does not exist is a 404", async () => {
+    const requests: OperationRequest[] = [
+      { op: "service:start", type: "postgres", name: "nope" },
+      { op: "service:stop", type: "postgres", name: "nope" },
+      { op: "service:restart", type: "postgres", name: "nope" },
+      { op: "service:destroy", type: "postgres", name: "nope", confirm: "nope" },
+      { op: "service:link", type: "postgres", name: "nope", app: "hello", restart: true },
+      {
+        op: "service:unlink",
+        type: "postgres",
+        name: "nope",
+        app: "hello",
+        restart: true,
+      },
+    ];
+    for (const req of requests) {
+      expect(await refusal(req, withServices)).toEqual({
+        status: 404,
+        kind: "not-found",
+        message: "No such service",
+      });
+    }
+  });
+
+  test("create wants a free name, and a version only where the plugin takes one", async () => {
+    expect(
+      await preflight(withServices, {
+        op: "service:create",
+        type: "postgres",
+        name: "fresh-db",
+        version: "16",
+      }),
+    ).toEqual({ ok: true, app: null });
+    expect(
+      await refusal(
+        { op: "service:create", type: "postgres", name: "hello-db", version: "" },
+        withServices,
+      ),
+    ).toMatchObject({ status: 409, kind: "exists" });
+    // The same name under another plugin is a different service.
+    expect(
+      (
+        await preflight(withServices, {
+          op: "service:create",
+          type: "redis",
+          name: "hello-db",
+          version: "",
+        })
+      ).ok,
+    ).toBe(true);
+    const bare = serviceHost(host, { postgres: {} }, { versioned: [] });
+    expect(
+      await refusal(
+        { op: "service:create", type: "postgres", name: "fresh-db", version: "16" },
+        bare,
+      ),
+    ).toMatchObject({ status: 400, kind: "unsupported" });
+    expect(
+      (
+        await preflight(bare, {
+          op: "service:create",
+          type: "postgres",
+          name: "fresh-db",
+          version: "",
+        })
+      ).ok,
+    ).toBe(true);
+  });
+
+  test("destroy is refused while an app is linked, naming it", async () => {
+    expect(
+      await refusal({ ...pg, op: "service:destroy", confirm: "hello-db" }, withServices),
+    ).toMatchObject({
+      status: 409,
+      kind: "in-use",
+      message: expect.stringContaining("hello-multi"),
+    });
+    expect(
+      (
+        await preflight(withServices, {
+          op: "service:destroy",
+          type: "postgres",
+          name: "spare-db",
+          confirm: "spare-db",
+        })
+      ).ok,
+    ).toBe(true);
+  });
+
+  test("linking what is already linked, or unlinking what is not, is a 409", async () => {
+    expect(
+      await refusal(
+        { ...pg, op: "service:link", app: "hello-multi", restart: true },
+        withServices,
+      ),
+    ).toMatchObject({ status: 409, kind: "conflict" });
+    expect(
+      await refusal(
+        { ...pg, op: "service:unlink", app: "hello", restart: true },
+        withServices,
+      ),
+    ).toMatchObject({ status: 409, kind: "conflict" });
+  });
+
+  test("link and unlink read the app: it must exist, hold no deploy lock, and not be deploying", async () => {
+    const link: OperationRequest = {
+      ...pg,
+      op: "service:link",
+      app: "nope",
+      restart: true,
+    };
+    expect(await refusal(link, withServices)).toMatchObject({
+      status: 404,
+      kind: "not-found",
+      message: "No such app",
+    });
+    const locked = serviceHost(fakeHost({ hello: running }, { locked: ["hello"] }), {
+      postgres: { "hello-db": {} },
+    });
+    expect(await refusal({ ...link, app: "hello" }, locked)).toMatchObject({
+      status: 409,
+      kind: "deploy-in-progress",
+    });
+    const result = await preflight(withServices, { ...link, app: "hello" });
+    expect(result.ok && result.app?.name).toBe("hello");
+    const unlink = await preflight(withServices, {
+      ...pg,
+      op: "service:unlink",
+      app: "hello-multi",
+      restart: false,
+    });
+    expect(unlink.ok && unlink.app?.name).toBe("hello-multi");
+  });
+
+  test("start, stop and restart must fit the state the service is in", async () => {
+    const off = { type: "postgres", name: "off-db" };
+    expect(await refusal({ ...pg, op: "service:start" }, withServices)).toEqual({
+      status: 409,
+      kind: "unavailable",
+      message: "Already running.",
+    });
+    expect(await refusal({ ...off, op: "service:stop" }, withServices)).toMatchObject({
+      status: 409,
+      message: "Already stopped.",
+    });
+    expect(await refusal({ ...off, op: "service:restart" }, withServices)).toMatchObject({
+      status: 409,
+      kind: "unavailable",
+    });
+    for (const req of [
+      { ...off, op: "service:start" },
+      { ...pg, op: "service:stop" },
+      { ...pg, op: "service:restart" },
+    ] as const) {
+      expect((await preflight(withServices, req)).ok).toBe(true);
+    }
+  });
+
+  test("a failed plugin read is a 502, not an unknown type", async () => {
+    const broken: DokkuRun = async () => ({
+      ok: false,
+      error: { kind: "connection", message: "ssh: connection refused" },
+    });
+    expect(await refusal({ ...pg, op: "service:start" }, broken)).toMatchObject({
+      status: 502,
+      kind: "connection",
+    });
+  });
+});
+
+describe("service output never carries a password", () => {
+  const secret = "postgres://postgres:s3cr3tpw@dokku-postgres-x:5432/x";
+  const leaky: DokkuSteps = {
+    step: async () =>
+      ok(
+        `=====> x postgres information\n       Dsn:    ${secret}\n       Status: running`,
+      ),
+    streamStep: () => ({
+      ok: true,
+      lines: (async function* () {
+        yield `       DATABASE_URL:  ${secret}`;
+        yield "-----> Restarting app hello";
+      })(),
+      exit: Promise.resolve({ kind: "command", message: `failed near ${secret}` }),
+      kill: () => {},
+    }),
+  };
+
+  test("a quick step's output is masked", async () => {
+    const result = await runSteps(leaky, [["postgres:create", "x"]]);
+    expect(result.ok && result.output).toContain(
+      "postgres://postgres:********@dokku-postgres-x",
+    );
+    expect(JSON.stringify(result)).not.toContain("s3cr3tpw");
+  });
+
+  test("a streamed step's lines and failure are masked", async () => {
+    const lines: string[] = [];
+    const error = await streamSteps(
+      leaky,
+      [["postgres:link", "x", "hello"]],
+      async (line) => {
+        lines.push(line);
+      },
+    );
+    expect(lines).toHaveLength(2);
+    expect(JSON.stringify({ lines, error })).not.toContain("s3cr3tpw");
+    expect(lines[0]).toContain("DATABASE_URL:  postgres://postgres:********@");
+  });
+
+  test("a failed quick step's message is masked", async () => {
+    const failing: DokkuSteps = {
+      ...leaky,
+      step: async () => ({
+        ok: false,
+        error: { kind: "command", message: `bad ${secret}` },
+      }),
+    };
+    const result = await runSteps(failing, [["postgres:link", "x", "hello"]]);
+    expect(JSON.stringify(result)).not.toContain("s3cr3tpw");
+  });
+});
+
+describe("failureText", () => {
+  const marker = "\u001b[1m\u001b[31m !     \u001b[0m\u001b[0m";
+
+  test("keeps the last lines that say something, plain and without a password", () => {
+    const message = [
+      "pg_dump: warning: lots of progress",
+      "pg_dump: more progress",
+      `${marker}connection to postgres://postgres:p@ss/word@dokku-postgres-x:5432/x failed`,
+      `${marker}`,
+      "pg_dump: error: query failed",
+      `${marker}Export aborted`,
+    ].join("\n");
+    expect(failureText(message)).toBe(
+      "connection to postgres://postgres:********@dokku-postgres-x:5432/x failed pg_dump: error: query failed Export aborted",
+    );
+    expect(failureText(message)).not.toContain("word");
+  });
+
+  test("a message with nothing in it is empty", () => {
+    expect(failureText(`${marker}\n\n`)).toBe("");
   });
 });
