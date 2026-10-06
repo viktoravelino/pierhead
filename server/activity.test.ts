@@ -181,4 +181,26 @@ describe("mergeActivity", () => {
       }
     }
   });
+  test("linking or unlinking a service claims a record only when it restarted the app", () => {
+    for (const name of ["service:link", "service:unlink"]) {
+      const link = { op: name, target: "hello-db" };
+      const restarted = merge([op(0, { ...link, restart: true })], [build("s1", 1)]);
+      expect(restarted).toHaveLength(1);
+      expect(restarted[0]).toMatchObject({ kind: "operation", builds: ["s1"] });
+      for (const restart of [false, undefined]) {
+        const quiet = merge([op(0, { ...link, restart })], [build("s1", 1)]);
+        expect(quiet.map((r) => r.kind).sort()).toEqual(["build", "operation"]);
+      }
+    }
+  });
+
+  test("the other service operations never claim a record", () => {
+    for (const name of ["service:create", "service:start", "service:export"]) {
+      const rows = merge(
+        [op(0, { op: name, app: null, target: "hello-db" })],
+        [build("s1", 1)],
+      );
+      expect(rows.map((r) => r.kind).sort()).toEqual(["build", "operation"]);
+    }
+  });
 });

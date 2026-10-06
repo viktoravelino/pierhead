@@ -20,6 +20,9 @@ import {
   isSafeArg,
   isSafeContainerPath,
   isSafeDomain,
+  isServiceName,
+  isServiceType,
+  isServiceVersion,
   isStorageName,
   networkAttachments,
   parsePortMapping,
@@ -31,6 +34,34 @@ import { createLimiter } from "./limit";
 function appArg(app: string) {
   if (!isAppName(app)) throw new Error(`Invalid app name: ${JSON.stringify(app)}`);
   return app;
+}
+
+/**
+ * The service plugins found installed (`plugin:list` entries that describe themselves as a
+ * service plugin). Refreshed by every discovery read, which the services routes and the
+ * operations' preflight always run first; a command for any other type never reaches ssh.
+ */
+const installedServiceTypes = new Set<string>();
+export const knownServiceTypes = {
+  replace(types: readonly string[]) {
+    installedServiceTypes.clear();
+    for (const type of types) installedServiceTypes.add(type);
+  },
+};
+
+/** Throws unless `type` is an installed service plugin: it becomes the namespace of the command. */
+function typeArg(type: string) {
+  if (!isServiceType(type) || !installedServiceTypes.has(type)) {
+    throw new Error(`Unknown service type: ${JSON.stringify(type)}`);
+  }
+  return type;
+}
+
+/** Throws on anything that is not a safe service name; sshd joins argv with spaces. */
+function serviceArg(name: string) {
+  if (!isServiceName(name))
+    throw new Error(`Invalid service name: ${JSON.stringify(name)}`);
+  return name;
 }
 
 /** Throws on anything that is not a valid env var name; it ends up in the remote command line. */
@@ -45,6 +76,9 @@ function keyArg(key: string) {
  * its quotes eaten. Single quotes keep everything literal except `'` itself.
  */
 export const shellQuote = (arg: string) => `'${arg.replaceAll("'", `'\\''`)}'`;
+
+/** How long a service export may run before the server ends it (a dump is a stream, not a quick call). */
+export const exportTimeoutMs = 600_000;
 
 /** Bounds for `logs` history; the route defaults and clamps its query to these. */
 export const logTail = { default: 100, max: 1000 } as const;
@@ -130,6 +164,34 @@ const commands = {
     ...(restart ? [] : ["--no-restart"]),
     appArg(app),
     keyArg(key),
+  ],
+  // Datastore services, for any installed `<type>` plugin built on the dokku-service
+  // template. `info` without a name prints one JSON object per service; the DSN in it (and
+  // in `--dsn`) carries the password, so the parsers mask it and only `service:dsn` reads it.
+  "service:info": (type: string, name?: string) => [
+    `${typeArg(type)}:info`,
+    ...(name === undefined ? [] : [serviceArg(name)]),
+    "--format",
+    "json",
+  ],
+  "service:dsn": (type: string, name: string) => [
+    `${typeArg(type)}:info`,
+    serviceArg(name),
+    "--dsn",
+  ],
+  // The plugin's flags for `create`, to tell whether it takes `--image-version`.
+  "service:create-help": (type: string) => [`${typeArg(type)}:help`, "create"],
+  // Follows the service's output after replaying `tail` lines (`--tail=N`; `--tail N` is refused). Streamed.
+  "service:logs": (type: string, name: string, tail: number) => {
+    if (!Number.isInteger(tail) || tail < 1 || tail > logTail.max) {
+      throw new Error(`Invalid tail: ${tail}`);
+    }
+    return [`${typeArg(type)}:logs`, serviceArg(name), `--tail=${tail}`];
+  },
+  // The dump on stdout, as bytes (see `streamBytes`).
+  "service:export": (type: string, name: string) => [
+    `${typeArg(type)}:export`,
+    serviceArg(name),
   ],
   // Follows the app's output (`--tail`) after replaying the last `tail` lines. Streamed, not `run`.
   logs: (app: string, tail: number, processType?: string) => {
@@ -387,6 +449,61 @@ const globalDomainsStep =
     return [name, ...domains.map(domainArg)];
   };
 
+const serviceVerbs = [
+  "create",
+  "destroy",
+  "link",
+  "unlink",
+  "start",
+  "stop",
+  "restart",
+] as const;
+type ServiceVerb = (typeof serviceVerbs)[number];
+const isServiceVerb = (verb: string): verb is ServiceVerb =>
+  serviceVerbs.some((v) => v === verb);
+
+/**
+ * `<type>:<verb> <service> [flags]` for the verbs every service plugin has, with the fixed
+ * flags pierhead uses: `--image-version <tag>` on create, `--force` on destroy (the route
+ * checks the typed name; Dokku's prompt fails without a tty) and `--no-restart` on
+ * link and unlink, then the app.
+ */
+function serviceStep(name: string): StepBuilder | null {
+  const [type = "", verb = "", ...more] = name.split(":");
+  if (more.length > 0 || !isServiceVerb(verb)) return null;
+  return ([service = "", ...rest]) => {
+    const argv = [`${typeArg(type)}:${verb}`, serviceArg(service)];
+    const unexpected = () => new Error(`Unexpected arguments for ${name}`);
+    switch (verb) {
+      case "create": {
+        const [flag, version, ...extra] = rest;
+        if (flag === undefined) return argv;
+        if (flag !== "--image-version" || extra.length > 0) throw unexpected();
+        if (version === undefined || !isServiceVersion(version)) {
+          throw new Error(`Invalid image version: ${JSON.stringify(version)}`);
+        }
+        return [...argv, flag, version];
+      }
+      case "destroy":
+        if (rest.length !== 1 || rest[0] !== "--force") throw unexpected();
+        return [...argv, "--force"];
+      case "link":
+      case "unlink": {
+        const [app = "", flag, ...extra] = rest;
+        if (extra.length > 0 || (flag !== undefined && flag !== "--no-restart")) {
+          throw unexpected();
+        }
+        return [...argv, appArg(app), ...(flag === undefined ? [] : [flag])];
+      }
+      case "start":
+      case "stop":
+      case "restart":
+        if (rest.length > 0) throw unexpected();
+        return argv;
+    }
+  };
+}
+
 /**
  * The writes behind `POST /api/operations/:op`, keyed by Dokku command. Each re-checks the
  * argv the shared operations table built (the server never trusts the client), so a
@@ -456,8 +573,9 @@ const isStep = (name: string): name is keyof typeof operationSteps =>
 export function buildStep(argv: readonly string[]) {
   const [name = "", ...args] = argv;
   try {
-    if (!isStep(name)) throw new Error(`Not allowed: ${name}`);
-    return { ok: true, argv: operationSteps[name](args) } as const;
+    const build = isStep(name) ? operationSteps[name] : serviceStep(name);
+    if (!build) throw new Error(`Not allowed: ${name}`);
+    return { ok: true, argv: build(args) } as const;
   } catch (e) {
     return { ok: false, error: { kind: "command", message: errorMessage(e) } } as const;
   }
@@ -485,6 +603,16 @@ const commandTimeoutMs: Partial<Record<string, number>> = {
   "proxy:enable": 120_000,
   "proxy:disable": 120_000,
 };
+
+/**
+ * Service operations wait for a container (start, restart, link's app restart) and answer
+ * only once it is ready; create streams, so it has no timeout at all.
+ */
+const serviceTimeoutMs = 120_000;
+
+const timeoutOf = (name: string, defaultMs: number) =>
+  commandTimeoutMs[name] ??
+  (!isStep(name) && serviceStep(name) !== null ? serviceTimeoutMs : defaultMs);
 
 /** Commands whose stdout is data, where surrounding whitespace is part of the value. */
 const untrimmed: ReadonlySet<string> = new Set(["config:get"]);
@@ -582,7 +710,7 @@ export function createDokku(config: DokkuConfig) {
   const exec = (name: string, argv: string[]) => limit(() => execNow(name, argv));
 
   async function execNow(name: string, argv: string[]): Promise<DokkuResult> {
-    const timeoutMs = commandTimeoutMs[name] ?? config.timeoutMs;
+    const timeoutMs = timeoutOf(name, config.timeoutMs);
     let timedOut = false;
     try {
       const proc = Bun.spawn(["ssh", ...sshArgs, "--", ...argv], {
@@ -696,7 +824,53 @@ export function createDokku(config: DokkuConfig) {
     }
   }
 
-  return Object.assign(run, { stream, step, streamStep });
+  /**
+   * Starts one allowlisted command whose stdout is binary (a dump) and hands it over as
+   * bytes: no pty, which would rewrite line endings, and its own connection. Killed after
+   * `timeoutMs`; `exit` then says so. A client that goes away calls `kill()`: the remote
+   * command ends on its next write.
+   */
+  function streamBytes<C extends DokkuCommand>(
+    timeoutMs: number,
+    name: C,
+    ...args: Parameters<(typeof commands)[C]>
+  ): DokkuBytes {
+    const built = buildArgv(name, args);
+    if (!built.ok) return built;
+    try {
+      const proc = Bun.spawn(
+        [
+          ...["ssh", ...sshArgs],
+          ...["-o", "ControlMaster=no", "-o", "ControlPath=none"],
+          ...["--", ...built.argv],
+        ],
+        { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+      );
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        proc.kill();
+      }, timeoutMs);
+      const stderr = new Response(proc.stderr).text();
+      const exit = async (): Promise<DokkuError | null> => {
+        const [code, message] = await Promise.all([proc.exited, stderr]);
+        clearTimeout(timer);
+        if (timedOut) {
+          return { kind: "timeout", message: `Timed out after ${timeoutMs}ms` };
+        }
+        if (code === 0) return null;
+        return {
+          kind: code === 255 ? "connection" : "command",
+          message: message.trim() || `ssh exited with code ${code}`,
+        };
+      };
+      return { ok: true, body: proc.stdout, exit: exit(), kill: () => proc.kill() };
+    } catch (e) {
+      return { ok: false, error: { kind: "spawn", message: errorMessage(e) } };
+    }
+  }
+
+  return Object.assign(run, { stream, step, streamStep, streamBytes });
 }
 
 /** Parallel quick calls on the shared connection; sshd's default MaxSessions is 10. */
@@ -711,6 +885,16 @@ export type DokkuStream =
   | {
       ok: true;
       lines: AsyncGenerator<string, void>;
+      exit: Promise<DokkuError | null>;
+      kill: () => void;
+    };
+
+/** A started command whose stdout is bytes; `exit` resolves once it ends, with the error or null. */
+export type DokkuBytes =
+  | { ok: false; error: DokkuError }
+  | {
+      ok: true;
+      body: ReadableStream<Uint8Array>;
       exit: Promise<DokkuError | null>;
       kill: () => void;
     };

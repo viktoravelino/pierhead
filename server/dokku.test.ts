@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { buildStep, shellQuote } from "./dokku";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { buildStep, createDokku, knownServiceTypes, shellQuote } from "./dokku";
 
 // sshd hands the command to a shell, so this quoting is what keeps a value one argument.
 describe("shellQuote", () => {
@@ -229,5 +229,123 @@ describe("buildStep: deploys", () => {
     ]) {
       expect(buildStep(argv).ok).toBe(false);
     }
+  });
+});
+
+describe("buildStep: services", () => {
+  beforeEach(() => knownServiceTypes.replace(["postgres", "redis"]));
+  afterEach(() => knownServiceTypes.replace([]));
+
+  test("the same builders serve every installed type, with only the fixed flags", () => {
+    for (const type of ["postgres", "redis"]) {
+      expect(buildStep([`${type}:create`, "hello-db"])).toEqual({
+        ok: true,
+        argv: [`${type}:create`, "hello-db"],
+      });
+      expect(buildStep([`${type}:start`, "hello-db"]).ok).toBe(true);
+      expect(buildStep([`${type}:stop`, "hello-db"]).ok).toBe(true);
+      expect(buildStep([`${type}:restart`, "hello-db"]).ok).toBe(true);
+      expect(buildStep([`${type}:destroy`, "hello-db", "--force"]).ok).toBe(true);
+    }
+    expect(
+      buildStep(["postgres:create", "hello-db", "--image-version", "16-alpine"]),
+    ).toEqual({
+      ok: true,
+      argv: ["postgres:create", "hello-db", "--image-version", "16-alpine"],
+    });
+    expect(buildStep(["postgres:link", "hello-db", "hello"]).ok).toBe(true);
+    expect(buildStep(["postgres:link", "hello-db", "hello", "--no-restart"]).ok).toBe(
+      true,
+    );
+    expect(buildStep(["redis:unlink", "hello-cache", "hello", "--no-restart"]).ok).toBe(
+      true,
+    );
+    // A type that becomes known later is served without a code change.
+    knownServiceTypes.replace(["postgres", "mysql"]);
+    expect(buildStep(["mysql:start", "db"]).ok).toBe(true);
+    expect(buildStep(["redis:start", "db"]).ok).toBe(false);
+  });
+
+  test("a type that is not an installed service plugin never becomes a command", () => {
+    // Core plugins have the same verbs (`nginx:stop`, `apps:destroy`...); only discovered
+    // service plugins may be addressed this way.
+    for (const argv of [
+      ["nginx:stop", "x"],
+      ["nginx:start", "x"],
+      ["storage:create", "x", "y"],
+      ["traefik:restart", "x"],
+      ["Post gres:start", "x"],
+      ["postgres;ls:start", "x"],
+      ["mysql:start", "x"],
+    ]) {
+      expect(buildStep(argv).ok).toBe(false);
+    }
+  });
+
+  test("anything off the grammar, extra or not a service verb is refused", () => {
+    for (const argv of [
+      ["postgres:create"],
+      ["postgres:create", "-h"],
+      ["postgres:create", "a b"],
+      ["postgres:create", "x", "--image-version"],
+      ["postgres:create", "x", "--image-version", "--force"],
+      ["postgres:create", "x", "--image-version", "16", "extra"],
+      ["postgres:create", "x", "--password", "pw"],
+      ["postgres:create", "x", "--image", "evil"],
+      ["postgres:destroy", "x"],
+      ["postgres:destroy", "x", "--force", "extra"],
+      ["postgres:destroy", "x", "-f"],
+      ["postgres:link", "x"],
+      ["postgres:link", "x", "Bad App"],
+      ["postgres:link", "x", "hello", "--alias", "FOO"],
+      ["postgres:link", "x", "hello", "--no-restart", "extra"],
+      ["postgres:unlink", "x", "hello", "-n"],
+      ["postgres:start", "x", "extra"],
+      ["postgres:start", "x;ls"],
+      ["postgres:export", "x"],
+      ["postgres:expose", "x", "5432"],
+      ["postgres:backup", "x", "bucket"],
+      ["postgres:connect", "x"],
+      ["postgres:enter", "x"],
+      ["postgres:create:more", "x"],
+    ]) {
+      expect(buildStep(argv).ok).toBe(false);
+    }
+  });
+
+  test("reads and the dump refuse an unknown type before anything reaches ssh", async () => {
+    knownServiceTypes.replace([]);
+    const dokku = createDokku({
+      host: "unreachable.invalid",
+      port: 22,
+      user: "dokku",
+      keyPath: "/nonexistent",
+      knownHostsPath: "/nonexistent",
+      timeoutMs: 1000,
+    });
+    for (const result of [
+      await dokku("service:info", "postgres"),
+      await dokku("service:info", "postgres", "hello-db"),
+      await dokku("service:dsn", "postgres", "hello-db"),
+      await dokku("service:create-help", "postgres"),
+    ]) {
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          kind: "command",
+          message: expect.stringContaining("Unknown service type"),
+        },
+      });
+    }
+    expect(dokku.stream("service:logs", "postgres", "hello-db", 100).ok).toBe(false);
+    expect(dokku.streamBytes(1000, "service:export", "postgres", "hello-db").ok).toBe(
+      false,
+    );
+    knownServiceTypes.replace(["postgres"]);
+    expect(await dokku("service:dsn", "postgres", "-x")).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("Invalid service name") },
+    });
+    expect(dokku.stream("service:logs", "postgres", "hello-db", 0).ok).toBe(false);
   });
 });

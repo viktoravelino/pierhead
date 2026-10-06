@@ -1,6 +1,13 @@
 import { formatPortMapping, storageHostPath } from "../shared/grammar";
-import { type OperationRequest, operationAvailability } from "../shared/operations";
+import {
+  isServiceRequest,
+  type OperationRequest,
+  operationAvailability,
+  type ServiceRequest,
+  serviceAvailability,
+} from "../shared/operations";
 import { stripAnsi } from "../shared/parse";
+import { maskSecrets } from "../shared/services";
 import type { AppDetail, PortMapping, ProxyRestore } from "../shared/types";
 import {
   domainOwners,
@@ -13,13 +20,14 @@ import {
   readGlobalDomains,
 } from "./apps";
 import type { DokkuError, DokkuRun, DokkuSteps } from "./dokku";
+import { getService, readServiceTypes } from "./services";
 import type { StateStore } from "./state";
 
 // What `POST /api/operations/:op` does around the shared table: checks against the live
 // host before anything runs, running the steps, and the one thing pierhead remembers.
 
 /** A request the host's current state rules out: the status and error body to answer with. */
-export type Refusal = { status: 404 | 409 | 502; kind: string; message: string };
+export type Refusal = { status: 400 | 404 | 409 | 502; kind: string; message: string };
 
 const failure = (error: DokkuError): Refusal =>
   isNotFound(error)
@@ -31,10 +39,8 @@ export type Preflight =
   | { ok: true; app: AppDetail | null }
   | { ok: false; refusal: Refusal };
 
-const refused = (status: 409, kind: string, message: string): Preflight => ({
-  ok: false,
-  refusal: { status, kind, message },
-});
+const refused = (status: 400 | 409, kind: string, message: string) =>
+  ({ ok: false, refusal: { status, kind, message } }) as const;
 
 /**
  * Whether the request makes sense on the host right now, run after the body parsed and
@@ -59,6 +65,8 @@ export async function preflight(
       ? { ok: true, app: null }
       : refused(409, "domain-in-use", `${req.app} is already a domain of ${owner}.`);
   }
+
+  if (isServiceRequest(req)) return servicePreflight(dokku, req);
 
   if (req.op === "network:create" || req.op === "network:destroy") {
     return networkPreflight(dokku, req);
@@ -89,23 +97,9 @@ export async function preflight(
       : { ok: true, app: null };
   }
 
-  // Dokku's deploy lock is the only sign of a deploy in progress (no report shows one);
-  // it also catches the rebuild or proxy toggle this server is streaming.
-  const lock = await dokku("apps:locked", req.app);
-  if (lock.ok) {
-    return refused(
-      409,
-      "deploy-in-progress",
-      `${req.app} holds a deploy lock: a deploy is running, or a failed one left it behind. Once no build is running, release it from the app's Settings tab (Release lock) or with \`dokku apps:unlock ${req.app}\`.`,
-    );
-  }
-  if (!lock.error.message.includes(noLock)) {
-    return { ok: false, refusal: failure(lock.error) };
-  }
-
-  const detail = await getApp(dokku, req.app);
-  if (!detail.ok) return { ok: false, refusal: failure(detail.error) };
-  const app = detail.value;
+  const live = await liveApp(dokku, req.app);
+  if (!live.ok) return live;
+  const app = live.app;
 
   const availability = operationAvailability(req.op, app);
   if (!availability.ok) return refused(409, "unavailable", availability.reason);
@@ -223,6 +217,96 @@ export async function preflight(
     case "proxy:disable":
       return { ok: true, app };
   }
+}
+
+/**
+ * The live detail of an app an operation acts on, once its deploy lock is known to be
+ * free. Dokku's deploy lock is the only sign of a deploy in progress (no report shows
+ * one); it also catches the rebuild or proxy toggle this server is streaming.
+ */
+async function liveApp(
+  dokku: DokkuRun,
+  name: string,
+): Promise<{ ok: true; app: AppDetail } | { ok: false; refusal: Refusal }> {
+  const lock = await dokku("apps:locked", name);
+  if (lock.ok) {
+    return refused(
+      409,
+      "deploy-in-progress",
+      `${name} holds a deploy lock: a deploy is running, or a failed one left it behind. Once no build is running, release it from the app's Settings tab (Release lock) or with \`dokku apps:unlock ${name}\`.`,
+    );
+  }
+  if (!lock.error.message.includes(noLock)) {
+    return { ok: false, refusal: failure(lock.error) };
+  }
+  const detail = await getApp(dokku, name);
+  if (!detail.ok) return { ok: false, refusal: failure(detail.error) };
+  return { ok: true, app: detail.value };
+}
+
+/**
+ * The service operations against the live host: the plugin is installed, the service is
+ * (or, for create, is not) there, and its state fits. Dokku exits 0 for starting what runs
+ * and for linking twice's neighbours, and `destroy` fails with a long message of its own;
+ * these say it first. Link and unlink also read the app, which restarts unless told not to.
+ */
+async function servicePreflight(
+  dokku: DokkuRun,
+  req: ServiceRequest,
+): Promise<Preflight> {
+  const types = await readServiceTypes(dokku);
+  if (!types.ok) return { ok: false, refusal: failure(types.error) };
+  if (!types.value.some((t) => t.type === req.type)) {
+    return refused(
+      400,
+      "unknown-type",
+      `${req.type} is not an installed service plugin (${types.value.map((t) => t.type).join(", ") || "none installed"}).`,
+    );
+  }
+  const service = await getService(dokku, req.type, req.name);
+  if (req.op === "service:create") {
+    if (service.ok) {
+      return refused(
+        409,
+        "exists",
+        `A ${req.type} service named ${req.name} already exists.`,
+      );
+    }
+    if (!isNotFound(service.error)) return { ok: false, refusal: failure(service.error) };
+    if (req.version !== "") {
+      const help = await dokku("service:create-help", req.type);
+      if (!help.ok) return { ok: false, refusal: failure(help.error) };
+      if (!`${help.stdout}\n${help.stderr}`.includes("--image-version")) {
+        return refused(400, "unsupported", `${req.type} does not take an image version.`);
+      }
+    }
+    return { ok: true, app: null };
+  }
+  if (!service.ok) {
+    return isNotFound(service.error)
+      ? {
+          ok: false,
+          refusal: { status: 404, kind: "not-found", message: "No such service" },
+        }
+      : { ok: false, refusal: failure(service.error) };
+  }
+  const availability = serviceAvailability(req, service.value);
+  if (!availability.ok) {
+    const kind =
+      req.op === "service:destroy"
+        ? "in-use"
+        : req.op === "service:link" || req.op === "service:unlink"
+          ? "conflict"
+          : "unavailable";
+    return refused(409, kind, availability.reason);
+  }
+  if (req.op !== "service:link" && req.op !== "service:unlink") {
+    return { ok: true, app: null };
+  }
+  const live = await liveApp(dokku, req.app);
+  if (!live.ok) return live;
+  const fits = operationAvailability(req.op, live.app);
+  return fits.ok ? { ok: true, app: live.app } : refused(409, "unavailable", fits.reason);
 }
 
 /** The target of a rename or clone: a name no app has and no app serves as a domain. */
@@ -468,15 +552,24 @@ export async function settleRename(
   });
 }
 
-/** Dokku's output with its ANSI colours stripped, blank lines dropped. */
-const cleanOutput = (...parts: string[]) => stripAnsi(parts.filter(Boolean).join("\n"));
+/**
+ * Dokku's output with its ANSI colours stripped, blank lines dropped, and the password of
+ * any connection string hidden (create and link print the service's DSN).
+ */
+const cleanOutput = (...parts: string[]) =>
+  maskSecrets(stripAnsi(parts.filter(Boolean).join("\n")));
+
+const maskedError = (error: DokkuError): DokkuError => ({
+  ...error,
+  message: maskSecrets(error.message),
+});
 
 /** Runs the steps in order, stopping at the first failure; resolves with their combined output. */
 export async function runSteps(dokku: DokkuSteps, steps: readonly (readonly string[])[]) {
   const outputs: string[] = [];
   for (const argv of steps) {
     const result = await dokku.step(argv);
-    if (!result.ok) return { ok: false, error: result.error } as const;
+    if (!result.ok) return { ok: false, error: maskedError(result.error) } as const;
     outputs.push(cleanOutput(result.stderr, result.stdout));
   }
   return { ok: true, output: cleanOutput(...outputs) } as const;
@@ -493,13 +586,13 @@ export async function streamSteps(
 ): Promise<DokkuError | null> {
   for (const argv of steps) {
     const running = dokku.streamStep(argv);
-    if (!running.ok) return running.error;
+    if (!running.ok) return maskedError(running.error);
     for await (const raw of running.lines) {
-      const line = stripAnsi(raw);
+      const line = maskSecrets(stripAnsi(raw));
       if (line.trim()) await onLine(line);
     }
     const error = await running.exit;
-    if (error) return { ...error, message: stripAnsi(error.message) };
+    if (error) return maskedError({ ...error, message: stripAnsi(error.message) });
   }
   return null;
 }

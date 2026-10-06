@@ -8,7 +8,12 @@ import {
   parseConfigSetBody,
   parseConfigValue,
 } from "../shared/config";
-import { isAppName, isProcessType } from "../shared/grammar";
+import {
+  isAppName,
+  isProcessType,
+  isServiceName,
+  isServiceType,
+} from "../shared/grammar";
 import {
   appOf,
   commandSteps,
@@ -23,6 +28,7 @@ import {
   targetOf,
 } from "../shared/operations";
 import { parseDokkuVersion, parseLogEvent, stripAnsi } from "../shared/parse";
+import { maskSecrets } from "../shared/services";
 import type { LogEndEvent, OperationRecord, PierheadConfig } from "../shared/types";
 import { mergeActivity } from "./activity";
 import {
@@ -45,6 +51,8 @@ import {
 import {
   createDokku,
   type DokkuError,
+  type DokkuStream,
+  exportTimeoutMs,
   isBuildId,
   loadDokkuConfig,
   logTail,
@@ -60,6 +68,7 @@ import {
   settleRename,
   streamSteps,
 } from "./operations";
+import { getService, listServices, readServiceTypes, withServices } from "./services";
 import { createStateStore, loadStateDir } from "./state";
 import { loadStaticDir, serveUi } from "./static";
 import { loadWriteGate } from "./writes";
@@ -117,6 +126,8 @@ type Attempt = {
   startedAt: number;
   /** Rename and clone: the name they make. */
   newName?: string;
+  /** Link and unlink: whether the app was asked to restart (a Dokku build record follows). */
+  restart?: boolean;
 };
 
 /**
@@ -126,7 +137,7 @@ type Attempt = {
  * carry a config value.
  */
 function logOperation(
-  { op, app, target, actor, startedAt, newName }: Attempt,
+  { op, app, target, actor, startedAt, newName, restart }: Attempt,
   outcome: OperationRecord["outcome"],
   reason = "",
   message = reason,
@@ -144,6 +155,7 @@ function logOperation(
     durationMs,
     message: message.slice(0, maxMessage),
     ...(newName === undefined ? {} : { newName }),
+    ...(restart === undefined ? {} : { restart }),
   });
 }
 
@@ -176,6 +188,10 @@ const invalidateFor = (req: OperationRequest) => {
       return;
     case "networks":
       invalidateNetworks(readCache);
+      return;
+    case "services":
+      readCache.invalidate(cacheKeys.services);
+      for (const name of change.apps) invalidateAppReads(name);
       return;
     case "host":
       hostCache.invalidate(cacheKeys.host);
@@ -246,6 +262,79 @@ const configFailure = (error: DokkuError) =>
     },
   }) as const;
 
+/** The services read, shared by its route and every app detail; invalidated by service operations. */
+const cachedServices = () =>
+  readCache.get(
+    cacheKeys.services,
+    () => listServices(dokku),
+    (r) => r.ok,
+  );
+
+/**
+ * Streams a started `logs` command as server-sent events: `log` ({ts, process, line}), then
+ * one `end` or `failed` (LogEndEvent). Not named `error`: EventSource uses that for
+ * connection failures.
+ */
+function logStream(c: Context, logs: Extract<DokkuStream, { ok: true }>) {
+  // Closing the tab must end the ssh child, or it tails forever. The client may already
+  // be gone (the check before this is async, and React remounts effects in dev), in which
+  // case Hono's `stream.onAbort` would never fire, so watch the request signal itself.
+  const { signal } = c.req.raw;
+  if (signal.aborted) logs.kill();
+  else signal.addEventListener("abort", logs.kill, { once: true });
+
+  return streamSSE(c, async (stream) => {
+    const heartbeat = setInterval(() => void stream.write(": ping\n\n"), heartbeatMs);
+    try {
+      for await (const raw of logs.lines) {
+        await stream.writeSSE({
+          event: "log",
+          data: JSON.stringify(parseLogEvent(raw)),
+        });
+      }
+      const error = await logs.exit;
+      const end: LogEndEvent = error
+        ? { kind: "failed", message: error.message }
+        : { kind: "exited" };
+      await stream.writeSSE({
+        event: end.kind === "exited" ? "end" : "failed",
+        data: JSON.stringify(end),
+      });
+    } finally {
+      clearInterval(heartbeat);
+      logs.kill();
+    }
+  });
+}
+
+/**
+ * Checks the `:type` and `:name` of a services route: well-formed, and a type that is an
+ * installed service plugin (the read also teaches the runner it). The error answer, or null.
+ */
+async function badServiceParams(type: string, name?: string) {
+  if (!isServiceType(type)) {
+    return {
+      status: 400,
+      body: invalid("invalid-type", `Invalid service type: ${type}`),
+    } as const;
+  }
+  if (name !== undefined && !isServiceName(name)) {
+    return {
+      status: 400,
+      body: invalid("invalid-name", `Invalid service name: ${name}`),
+    } as const;
+  }
+  const types = await readServiceTypes(dokku);
+  if (!types.ok) return { status: 502, body: types } as const;
+  if (!types.value.some((t) => t.type === type)) {
+    const message = `${type} is not an installed service plugin.`;
+    return { status: 400, body: invalid("unknown-type", message) } as const;
+  }
+  return null;
+}
+
+const noSuchService = () => invalid("not-found", "No such service");
+
 const app = new Hono()
   .get("/api/health", async (c) => {
     const result = await dokku("version");
@@ -301,6 +390,121 @@ const app = new Hono()
     if (!result.ok) return c.json(result, 502);
     return c.json({ ok: true, apps: result.value } as const);
   })
+  // Datastore services of every installed service plugin, grouped by type (cached with the
+  // app reads). No connection string is in it: see the `dsn` route.
+  .get("/api/services", async (c) => {
+    const result = await cachedServices();
+    if (!result.ok) return c.json(result, 502);
+    return c.json({ ok: true, groups: result.value } as const);
+  })
+  .get("/api/services/:type/:name", async (c) => {
+    const { type, name } = c.req.param();
+    const bad = await badServiceParams(type, name);
+    if (bad) return c.json(bad.body, bad.status);
+    const result = await getService(dokku, type, name);
+    if (!result.ok) {
+      return isNotFound(result.error)
+        ? c.json(noSuchService(), 404)
+        : c.json(result, 502);
+    }
+    return c.json({ ok: true, service: result.value } as const);
+  })
+  // The connection string, with its password, on explicit request. Never cached and never
+  // logged, like a config value.
+  .get("/api/services/:type/:name/dsn", async (c) => {
+    const { type, name } = c.req.param();
+    const bad = await badServiceParams(type, name);
+    if (bad) return c.json(bad.body, bad.status);
+    const result = await dokku("service:dsn", type, name);
+    if (!result.ok) {
+      if (isNotFound(result.error)) return c.json(noSuchService(), 404);
+      const { kind, message } = result.error;
+      return c.json(invalid(kind, maskSecrets(message)), 502);
+    }
+    if (!result.stdout) {
+      return c.json(invalid("not-found", `${name} has no connection string`), 404);
+    }
+    c.header("Cache-Control", "no-store");
+    return c.json({ ok: true, dsn: result.stdout } as const);
+  })
+  // Server-sent events like an app's logs: the last `tail` lines, then new ones.
+  .get("/api/services/:type/:name/logs", async (c) => {
+    const { type, name } = c.req.param();
+    const tailParam = c.req.query("tail");
+    const tail = tailParam === undefined ? logTail.default : Number(tailParam);
+    if (!Number.isInteger(tail) || tail < 1 || tail > logTail.max) {
+      const message = `tail must be an integer from 1 to ${logTail.max}`;
+      return c.json(invalid("invalid-tail", message), 400);
+    }
+    const bad = await badServiceParams(type, name);
+    if (bad) return c.json(bad.body, bad.status);
+    const found = await getService(dokku, type, name);
+    if (!found.ok) {
+      return isNotFound(found.error) ? c.json(noSuchService(), 404) : c.json(found, 502);
+    }
+    const logs = dokku.stream("service:logs", type, name, tail);
+    if (!logs.ok) return c.json(logs, 502);
+    return logStream(c, logs);
+  })
+  // The dump as a download, `<name>-<date>.dump`: `pg_dump`'s custom format for postgres,
+  // an RDB file for redis. Streamed as it is made, ended after `exportTimeoutMs`; a dump that
+  // fails part way errors the response, so a download never ends looking whole. A read, so
+  // not behind the write switch, but recorded in the activity log like a write.
+  .get("/api/services/:type/:name/export", async (c) => {
+    const startedAt = Date.now();
+    const { type, name } = c.req.param();
+    const bad = await badServiceParams(type, name);
+    if (bad) return c.json(bad.body, bad.status);
+    const found = await getService(dokku, type, name);
+    if (!found.ok) {
+      return isNotFound(found.error) ? c.json(noSuchService(), 404) : c.json(found, 502);
+    }
+    const attempt: Attempt = {
+      op: "service:export",
+      app: null,
+      target: name,
+      actor: actorOf(c),
+      startedAt,
+    };
+    const dump = dokku.streamBytes(exportTimeoutMs, "service:export", type, name);
+    if (!dump.ok) {
+      logOperation(attempt, "failed", dump.error.kind, dump.error.message);
+      return c.json(dump, 502);
+    }
+    const { signal } = c.req.raw;
+    if (signal.aborted) dump.kill();
+    else signal.addEventListener("abort", dump.kill, { once: true });
+    const reader = dump.body.getReader();
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { done, value } = await reader.read();
+        if (!done) {
+          controller.enqueue(value);
+          return;
+        }
+        const error = await dump.exit;
+        if (error) {
+          logOperation(attempt, "failed", error.kind, error.message);
+          controller.error(new Error(error.message));
+        } else {
+          logOperation(attempt, "ok");
+          controller.close();
+        }
+      },
+      cancel() {
+        dump.kill();
+        logOperation(attempt, "failed", "canceled", "The download was canceled.");
+      },
+    });
+    const date = new Date(startedAt).toISOString().slice(0, 10);
+    return new Response(body, {
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${name}-${date}.dump"`,
+        "Cache-Control": "no-store",
+      },
+    });
+  })
   .get("/api/apps", async (c) => {
     const result = await readCache.get(
       cacheKeys.list,
@@ -326,7 +530,8 @@ const app = new Hono()
     );
     if (result.ok) {
       // What the app's port map and domains were before pierhead disabled its proxy, if it did.
-      const app = { ...result.value, proxyRestore: state.restoreOf(name) };
+      const withLinks = withServices(result.value, await cachedServices());
+      const app = { ...withLinks, proxyRestore: state.restoreOf(name) };
       return c.json({ ok: true, app } as const);
     }
     return c.json(result, result.error.kind === "not-found" ? 404 : 502);
@@ -465,35 +670,7 @@ const app = new Hono()
     const logs = dokku.stream("logs", name, tail, processType);
     if (!logs.ok) return c.json(logs, 502);
 
-    // Closing the tab must end the ssh child, or it tails forever. The client may already
-    // be gone (the ps:report above is async, and React remounts effects in dev), in which
-    // case Hono's `stream.onAbort` would never fire, so watch the request signal itself.
-    const { signal } = c.req.raw;
-    if (signal.aborted) logs.kill();
-    else signal.addEventListener("abort", logs.kill, { once: true });
-
-    return streamSSE(c, async (stream) => {
-      const heartbeat = setInterval(() => void stream.write(": ping\n\n"), heartbeatMs);
-      try {
-        for await (const raw of logs.lines) {
-          await stream.writeSSE({
-            event: "log",
-            data: JSON.stringify(parseLogEvent(raw)),
-          });
-        }
-        const error = await logs.exit;
-        const end: LogEndEvent = error
-          ? { kind: "failed", message: error.message }
-          : { kind: "exited" };
-        await stream.writeSSE({
-          event: end.kind === "exited" ? "end" : "failed",
-          data: JSON.stringify(end),
-        });
-      } finally {
-        clearInterval(heartbeat);
-        logs.kill();
-      }
-    });
+    return logStream(c, logs);
   })
   // Every write the UI makes but config vars (see `shared/operations.ts`). Quick operations
   // answer `{ ok, output }` once Dokku is done. Operations that redeploy (rebuild, a proxy
@@ -533,6 +710,7 @@ const app = new Hono()
       actor,
       startedAt,
       ...("newName" in req ? { newName: req.newName } : {}),
+      ...("restart" in req ? { restart: req.restart } : {}),
     };
     // Before any read of the host: a typo in the name costs nothing.
     const confirm = destructiveConfirm(req);
