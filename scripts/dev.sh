@@ -147,6 +147,8 @@ reset() {
   docker compose down -v --remove-orphans
   # hello-net lives on the host daemon, outside Dokku's volume.
   docker network rm hello-net 2>/dev/null || true
+  # Service containers (restart: always) that survived, e.g. when Dokku was already stopped.
+  docker ps -aq --filter label=dokku=service | xargs docker rm -f 2>/dev/null || true
   # Anything labelled at deploy time that survived (e.g. Dokku was already stopped).
   docker ps -aq --filter label=pierhead.dev=1 | xargs docker rm -f 2>/dev/null || true
   # A fresh Dokku gets fresh host keys, and no history.
