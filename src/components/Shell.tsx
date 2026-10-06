@@ -15,8 +15,8 @@ import { backendHealthQuery } from "../api/backend";
 import { dataSource } from "../api/client";
 import { hostQuery } from "../api/queries";
 import { useTheme } from "../lib/theme";
-import { ActionHost } from "./ActionHost";
 import { CommandPalette } from "./CommandPalette";
+import { OperationHost } from "./OperationHost";
 import { ToastProvider } from "./Toast";
 import { Kbd, Skeleton } from "./ui";
 
@@ -112,7 +112,7 @@ export function Shell() {
 
   return (
     <ToastProvider>
-      <ActionHost>
+      <OperationHost>
         <div className="grid min-h-dvh md:grid-cols-[14.5rem_minmax(0,1fr)]">
           <aside className="sticky top-0 hidden h-dvh flex-col gap-6 border-r border-line bg-panel px-3 py-4 md:flex">
             <div className="px-2">
@@ -226,7 +226,7 @@ export function Shell() {
         </nav>
 
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
-      </ActionHost>
+      </OperationHost>
     </ToastProvider>
   );
 }

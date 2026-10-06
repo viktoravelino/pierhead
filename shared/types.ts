@@ -87,6 +87,11 @@ export type AppDetail = AppCommon & {
   globalDomain: string;
   ports: PortMapping[];
   networks: AppNetwork[];
+  /**
+   * The port map the app had when pierhead disabled its proxy (Dokku clears it, and
+   * `proxy:enable` does not restore it). Only the API server knows it, in memory.
+   */
+  previousPorts?: PortMapping[];
 };
 
 /**

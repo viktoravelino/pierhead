@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { type ActionOutputEvent, appActions, isAppActionId } from "../shared/actions";
 import {
   configValueProblem,
   isConfigKey,
@@ -9,7 +8,17 @@ import {
   parseConfigSetBody,
   parseConfigValue,
 } from "../shared/config";
-import { parseDokkuVersion, parseLogEvent, stripAnsi } from "../shared/parse";
+import { isAppName } from "../shared/grammar";
+import {
+  commandSteps,
+  conflictsOnNoOp,
+  destructiveConfirm,
+  isOperationId,
+  type OperationOutputEvent,
+  parseOperation,
+  streamsOutput,
+} from "../shared/operations";
+import { parseDokkuVersion, parseLogEvent } from "../shared/parse";
 import type { LogEndEvent, PierheadConfig } from "../shared/types";
 import { getApp, isNotFound, listApps, listNetworks } from "./apps";
 import {
@@ -22,13 +31,20 @@ import {
 import {
   createDokku,
   type DokkuError,
-  isAppName,
   isProcessType,
   loadDokkuConfig,
   logTail,
 } from "./dokku";
 import { readDokkuHost } from "./host";
 import { createHostMetrics, loadGlancesUrl } from "./metrics";
+import {
+  afterSuccess,
+  portsToRemember,
+  preflight,
+  previousPorts,
+  runSteps,
+  streamSteps,
+} from "./operations";
 import { loadStaticDir, serveUi } from "./static";
 import { loadWriteGate } from "./writes";
 
@@ -49,11 +65,22 @@ const heartbeatMs = 15_000;
 const invalid = (kind: string, message: string) =>
   ({ ok: false, error: { kind, message } }) as const;
 
-/** One stdout line per action attempt, including the ones refused before Dokku ran. */
-const logAction = (app: string, action: string, outcome: string, startedAt?: number) => {
-  const took = startedAt === undefined ? "" : ` in ${Date.now() - startedAt}ms`;
-  console.log(`action app=${app} action=${action} outcome=${outcome}${took}`);
-};
+/**
+ * One stdout line per operation attempt, including the ones refused before Dokku ran:
+ * `outcome` is `ok`, `refused` or `failed`, optionally followed by the reason in parens.
+ */
+const logOperation = (op: string, app: string, outcome: string, startedAt: number) =>
+  console.log(
+    `operation op=${op} app=${app} outcome=${outcome} in ${Date.now() - startedAt}ms`,
+  );
+
+/** The app of a body that was never parsed, for the log only: `-` unless it is a valid name. */
+const loggedApp = (body: unknown) =>
+  typeof body === "object" && body !== null && "app" in body
+    ? typeof body.app === "string" && isAppName(body.app)
+      ? body.app
+      : "-"
+    : "-";
 
 /**
  * One stdout line per config change attempt: app, key and outcome, never the value.
@@ -163,7 +190,11 @@ const app = new Hono()
       () => getApp(dokku, name),
       (r) => r.ok,
     );
-    if (result.ok) return c.json({ ok: true, app: result.value } as const);
+    if (result.ok) {
+      // What the app's port map was before pierhead disabled its proxy, if it did.
+      const app = { ...result.value, previousPorts: previousPorts.get(name) };
+      return c.json({ ok: true, app } as const);
+    }
     return c.json(result, result.error.kind === "not-found" ? 404 : 502);
   })
   // Config var names only (`config:keys`), each flagged when Dokku manages it. Values are
@@ -330,52 +361,65 @@ const app = new Hono()
       }
     });
   })
-  // start, stop and restart answer `{ ok, output }` once Dokku is done. rebuild is
-  // server-sent events like the logs route: `output` ({line}) per line, then one `end` or
-  // `failed` (LogEndEvent). A rebuild keeps running if the client goes away, since
-  // killing a deploy half way is worse than letting it finish.
-  .post("/api/apps/:name/actions/:action", async (c) => {
-    const name = c.req.param("name");
-    if (!isAppName(name))
-      return c.json(invalid("invalid-name", `Invalid app name: ${name}`), 400);
-    const action = c.req.param("action");
-    if (!isAppActionId(action)) {
-      return c.json(invalid("invalid-action", `Unknown action: ${action}`), 400);
+  // Every write the UI makes but config vars (see `shared/operations.ts`). Quick operations
+  // answer `{ ok, output }` once Dokku is done. Operations that redeploy (rebuild, a proxy
+  // toggle on a deployed app) are server-sent events like the logs route: `output`
+  // ({line}) per line, then one `end` or `failed` (LogEndEvent). They keep running if the
+  // client goes away, since killing a deploy half way is worse than letting it finish.
+  .post("/api/operations/:op", async (c) => {
+    const startedAt = Date.now();
+    const op = c.req.param("op");
+    if (!isOperationId(op)) {
+      return c.json(invalid("invalid-operation", `Unknown operation: ${op}`), 400);
     }
+    const body: unknown = await c.req.json().catch(() => null);
     if (!writeGate.enabled) {
-      logAction(name, action, "refused (writes-disabled)");
+      logOperation(op, loggedApp(body), "refused (writes-disabled)", startedAt);
       return c.json({ ok: false, error: writeGate.error } as const, 403);
     }
-    const exists = await dokku("ps:report", name);
-    if (!exists.ok) return c.json(exists, isNotFound(exists.error) ? 404 : 502);
+    const req = parseOperation(op, body);
+    if (typeof req === "string") {
+      logOperation(op, loggedApp(body), "refused (invalid-body)", startedAt);
+      return c.json(invalid("invalid-body", req), 400);
+    }
 
-    const startedAt = Date.now();
-    const def = appActions[action];
-    if (!def.streams) {
-      const result = await dokku(def.command, name);
+    const checked = await preflight(dokku, req);
+    if (!checked.ok) {
+      const { status, kind, message } = checked.refusal;
+      const outcome = status === 502 ? `failed (${kind})` : `refused (${kind})`;
+      logOperation(op, req.app, outcome, startedAt);
+      return c.json(invalid(kind, message), status);
+    }
+    const confirm = destructiveConfirm(req);
+    if (confirm && confirm.typed !== confirm.expected) {
+      logOperation(op, req.app, "refused (confirm-mismatch)", startedAt);
+      const message = `Type ${confirm.expected} to confirm.`;
+      return c.json(invalid("confirm-mismatch", message), 400);
+    }
+
+    const steps = commandSteps(req);
+    const remembered = await portsToRemember(dokku, req);
+
+    if (!streamsOutput(req, checked.app)) {
+      const result = await runSteps(dokku, steps);
+      invalidateApp(readCache, req.app);
       if (!result.ok) {
-        logAction(name, action, `failed (${result.error.kind})`, startedAt);
-        return c.json(result, 502);
+        logOperation(op, req.app, `failed (${result.error.kind})`, startedAt);
+        return c.json({ ok: false, error: result.error } as const, 502);
       }
-      invalidateApp(readCache, name);
-      const output = stripAnsi([result.stderr, result.stdout].filter(Boolean).join("\n"));
-      const noOp = dokkuNoOp(output);
+      const noOp = conflictsOnNoOp(req) ? dokkuNoOp(result.output) : undefined;
       if (noOp) {
-        logAction(name, action, `conflict (${noOp})`, startedAt);
+        logOperation(op, req.app, `refused (conflict: ${noOp})`, startedAt);
         return c.json(invalid("conflict", noOp), 409);
       }
-      logAction(name, action, "ok", startedAt);
-      return c.json({ ok: true, output } as const);
+      afterSuccess(req, remembered);
+      logOperation(op, req.app, "ok", startedAt);
+      return c.json({ ok: true, output: result.output } as const);
     }
 
-    const rebuild = dokku.stream(def.command, name);
-    if (!rebuild.ok) {
-      logAction(name, action, `failed (${rebuild.error.kind})`, startedAt);
-      return c.json(rebuild, 502);
-    }
     return streamSSE(c, async (stream) => {
       // Past an abort the lines are still read (an unread pipe would stall the build).
-      const send = (event: string, data: ActionOutputEvent | LogEndEvent) =>
+      const send = (event: string, data: OperationOutputEvent | LogEndEvent) =>
         stream.aborted
           ? Promise.resolve()
           : stream.writeSSE({ event, data: JSON.stringify(data) }).catch(() => {});
@@ -383,19 +427,16 @@ const app = new Hono()
         if (!stream.aborted) stream.write(": ping\n\n").catch(() => {});
       }, heartbeatMs);
       try {
-        for await (const raw of rebuild.lines) {
-          const line = stripAnsi(raw);
-          if (line.trim()) await send("output", { line });
-        }
-        const error = await rebuild.exit;
-        // A failed rebuild can still have stopped the app, so drop the cache either way.
-        invalidateApp(readCache, name);
+        const error = await streamSteps(dokku, steps, (line) => send("output", { line }));
+        // A failed deploy can still have changed the app, so drop the cache either way.
+        invalidateApp(readCache, req.app);
+        if (!error) afterSuccess(req, remembered);
         const end: LogEndEvent = error
-          ? { kind: "failed", message: stripAnsi(error.message) }
+          ? { kind: "failed", message: error.message }
           : { kind: "exited" };
-        logAction(
-          name,
-          action,
+        logOperation(
+          op,
+          req.app,
           end.kind === "failed" ? `failed (${end.message})` : "ok",
           startedAt,
         );

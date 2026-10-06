@@ -1,10 +1,5 @@
 import { configValueProblem, isConfigKey } from "../shared/config";
-
-/**
- * Dokku's app-name grammar: lowercase alphanumerics, dots and hyphens, starting with an
- * alphanumeric (what `apps:create` enforces on 0.38).
- */
-export const isAppName = (name: string) => /^[a-z0-9][a-z0-9.-]*$/.test(name);
+import { isAppName, isDomain, parsePortMapping } from "../shared/grammar";
 
 /** Throws on anything that is not a valid app name; sshd joins argv with spaces. */
 function appArg(app: string) {
@@ -56,6 +51,7 @@ const globalReport = (plugin: string) => () => [
 const commands = {
   version: () => ["version"],
   "apps:list": () => ["apps:list", "--format", "json"],
+  "apps:exists": (app: string) => ["apps:exists", appArg(app)],
   "ps:report": report("ps"),
   "domains:report": report("domains"),
   "ports:report": report("ports"),
@@ -72,13 +68,8 @@ const commands = {
   "network:list": () => ["network:list", "--format", "json"],
   "plugin:list": () => ["plugin:list", "--format", "json"],
   "ssh-keys:list": () => ["ssh-keys:list", "--format", "json"],
-  // Writes. Dokku exits 0 for no-ops (start on a running app, anything on a never-deployed
-  // one), only warning on a `!` line; the route turns those into conflicts.
-  "ps:start": (app: string) => ["ps:start", appArg(app)],
-  "ps:stop": (app: string) => ["ps:stop", appArg(app)],
-  "ps:restart": (app: string) => ["ps:restart", appArg(app)],
-  // Builds and redeploys (~25s locally, longer for real builds). Streamed, not `run`.
-  "ps:rebuild": (app: string) => ["ps:rebuild", appArg(app)],
+  // Writes that take a body of free-form values are in `operationSteps`; these two keep
+  // their own routes because their values are secrets.
   // Config. Values are only ever read one at a time (`config:get`); `config:set` carries
   // the value as the single argument `KEY=value`, shell-quoted for the SSH hop. Without
   // `--no-restart` Dokku redeploys the app (~22s locally), even when `unset` found nothing.
@@ -120,23 +111,103 @@ const commands = {
   },
 } satisfies Record<string, (...args: never[]) => string[]>;
 
+/** Checks one step's args (everything after the command name) and returns the argv to send. */
+type StepBuilder = (args: string[]) => string[];
+
+/** `<command> [flags] <app>`: exactly the fixed flags, then an app name. */
+const appStep =
+  (name: string, flags: string[] = []): StepBuilder =>
+  (args) => {
+    const [app, ...rest] = args.slice(flags.length);
+    if (args.slice(0, flags.length).join(" ") !== flags.join(" ") || rest.length > 0) {
+      throw new Error(`Unexpected arguments for ${name}`);
+    }
+    return [name, ...flags, appArg(app ?? "")];
+  };
+
+/** `<command> <app> <value>...` with at least one value, each checked and quoted by `value`. */
+const listStep =
+  (name: string, value: (arg: string) => string): StepBuilder =>
+  ([app = "", ...values]) => {
+    if (values.length === 0) throw new Error(`${name} needs at least one value`);
+    return [name, appArg(app), ...values.map(value)];
+  };
+
+/** A domain can contain `*`, which the remote shell would expand, so it is quoted. */
+function domainArg(domain: string) {
+  if (!isDomain(domain)) throw new Error(`Invalid domain: ${JSON.stringify(domain)}`);
+  return shellQuote(domain);
+}
+
+/** `http:80:5000`; the grammar leaves nothing for a shell to act on. */
+function portArg(mapping: string) {
+  if (!parsePortMapping(mapping)) {
+    throw new Error(`Invalid port mapping: ${JSON.stringify(mapping)}`);
+  }
+  return mapping;
+}
+
+/**
+ * The writes behind `POST /api/operations/:op`, keyed by Dokku command. Each re-checks the
+ * argv the shared operations table built (the server never trusts the client), so a
+ * request that slipped past `parse` still cannot reach the shell.
+ */
+const operationSteps = {
+  "ps:start": appStep("ps:start"),
+  "ps:stop": appStep("ps:stop"),
+  "ps:restart": appStep("ps:restart"),
+  // Builds and redeploys (~25s locally, longer for real builds). Streamed.
+  "ps:rebuild": appStep("ps:rebuild"),
+  "apps:create": appStep("apps:create"),
+  // `--force` skips Dokku's name prompt, which fails without a tty; the route checks the typed name.
+  "apps:destroy": appStep("apps:destroy", ["--force"]),
+  "domains:add": listStep("domains:add", domainArg),
+  "domains:remove": listStep("domains:remove", domainArg),
+  "domains:set": listStep("domains:set", domainArg),
+  "ports:add": listStep("ports:add", portArg),
+  "ports:remove": listStep("ports:remove", portArg),
+  "ports:set": listStep("ports:set", portArg),
+  // Both redeploy a deployed app and `disable` clears its port map.
+  "proxy:enable": appStep("proxy:enable"),
+  "proxy:disable": appStep("proxy:disable"),
+} satisfies Record<string, StepBuilder>;
+
+const isStep = (name: string): name is keyof typeof operationSteps =>
+  Object.hasOwn(operationSteps, name);
+
+/** Validates one operation step (argv after `dokku`); a failure is a `command` error. */
+export function buildStep(argv: readonly string[]) {
+  const [name = "", ...args] = argv;
+  try {
+    if (!isStep(name)) throw new Error(`Not allowed: ${name}`);
+    return { ok: true, argv: operationSteps[name](args) } as const;
+  } catch (e) {
+    return { ok: false, error: { kind: "command", message: errorMessage(e) } } as const;
+  }
+}
+
 export type DokkuCommand = keyof typeof commands;
 
 /**
  * Per-command `run` timeouts for commands slower than the default. Measured against the
  * local Dokku: start 24s, restart 22s (both wait on healthchecks), stop 1s.
  */
-const commandTimeoutMs: Partial<Record<DokkuCommand, number>> = {
+const commandTimeoutMs: Partial<Record<string, number>> = {
   "ps:start": 120_000,
   "ps:stop": 120_000,
   "ps:restart": 120_000,
   // Both restart the app unless told not to.
   "config:set": 120_000,
   "config:unset": 120_000,
+  // Stops and removes every container and the image.
+  "apps:destroy": 120_000,
+  // Redeploys a deployed app (~25s locally); the routes stream them, this is the quiet case.
+  "proxy:enable": 120_000,
+  "proxy:disable": 120_000,
 };
 
 /** Commands whose stdout is data, where surrounding whitespace is part of the value. */
-const untrimmed: ReadonlySet<DokkuCommand> = new Set(["config:get"]);
+const untrimmed: ReadonlySet<string> = new Set(["config:get"]);
 
 export type DokkuError = {
   kind: "timeout" | "connection" | "command" | "spawn" | "parse" | "not-found";
@@ -215,9 +286,16 @@ export function createDokku(config: DokkuConfig) {
     ...args: Parameters<(typeof commands)[C]>
   ): Promise<DokkuResult> {
     const built = buildArgv(name, args);
-    if (!built.ok) return built;
-    const argv = built.argv;
+    return built.ok ? exec(name, built.argv) : built;
+  }
 
+  /** Runs one operation step (argv after `dokku`, see `buildStep`); never throws. */
+  async function step(argv: readonly string[]): Promise<DokkuResult> {
+    const built = buildStep(argv);
+    return built.ok ? exec(argv[0] ?? "", built.argv) : built;
+  }
+
+  async function exec(name: string, argv: string[]): Promise<DokkuResult> {
     const timeoutMs = commandTimeoutMs[name] ?? config.timeoutMs;
     let timedOut = false;
     try {
@@ -278,13 +356,22 @@ export function createDokku(config: DokkuConfig) {
     ...args: Parameters<(typeof commands)[C]>
   ): DokkuStream {
     const built = buildArgv(name, args);
-    if (!built.ok) return built;
+    return built.ok ? spawnStream(built.argv) : built;
+  }
+
+  /** `stream` for an operation step (see `buildStep`). */
+  function streamStep(argv: readonly string[]): DokkuStream {
+    const built = buildStep(argv);
+    return built.ok ? spawnStream(built.argv) : built;
+  }
+
+  function spawnStream(argv: string[]): DokkuStream {
     try {
       const proc = Bun.spawn(
         [
           ...["ssh", "-tt", ...sshArgs],
           ...["-o", "ControlMaster=no", "-o", "ControlPath=none"],
-          ...["--", ...built.argv],
+          ...["--", ...argv],
         ],
         // ssh with a pty wants a live stdin; it is never written to.
         { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
@@ -323,7 +410,7 @@ export function createDokku(config: DokkuConfig) {
     }
   }
 
-  return Object.assign(run, { stream });
+  return Object.assign(run, { stream, step, streamStep });
 }
 
 /** Minimum time a streaming ssh lives before `kill` takes effect, see `stream`. */

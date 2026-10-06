@@ -3,6 +3,7 @@ import {
   needsGitRev,
   parseAppDetail,
   parseAppSummary,
+  parseDomains,
   parseNetworkList,
   parseReport,
   type Report,
@@ -125,6 +126,28 @@ export const listNetworks = (dokku: Dokku) =>
     return buildNetworks(
       parseNetworkList(stdoutOf(networks)),
       appNames.map((name, i) => ({ name, report: appReports[i] ?? {} })),
+    );
+  });
+
+/**
+ * Which app serves each domain: `apps:list` and the all-apps `domains:report`, two SSH
+ * calls in parallel, zipped by position like `listApps`.
+ */
+export const domainOwners = (dokku: Dokku) =>
+  outcome<Map<string, string>>(async () => {
+    const [names, reports] = await Promise.all([
+      dokku("apps:list"),
+      dokku("domains:report"),
+    ]);
+    const appNames = parseNames(stdoutOf(names));
+    const rows = parseReportLines(stdoutOf(reports));
+    if (rows.length !== appNames.length) {
+      throw new Error("App list changed while reading reports; retry");
+    }
+    return new Map(
+      appNames.flatMap((name, i) =>
+        parseDomains(rows[i] ?? {}).domains.map((domain) => [domain, name] as const),
+      ),
     );
   });
 

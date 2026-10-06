@@ -5,8 +5,8 @@ import type { ConfigKey } from "../../../shared/config";
 import { describeError } from "../../api/backend";
 import { type AppView, dataSource, getConfigValue } from "../../api/client";
 import { configQuery } from "../../api/queries";
-import { useWrites, type Writes } from "../../components/ActionHost";
 import { ConfigDialog, type ConfigDialogState } from "../../components/ConfigDialog";
+import { useWrites, type Writes } from "../../components/OperationHost";
 import { EmptyNote, ErrorNote, Panel, Skeleton } from "../../components/ui";
 
 const stubTitle = "Stub: editing is not wired up in this preview";
