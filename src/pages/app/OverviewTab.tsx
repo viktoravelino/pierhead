@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { formatFormationEntry } from "../../../shared/grammar";
 import type { Build } from "../../../shared/types";
 import type { AppView } from "../../api/client";
 import { deploysQuery } from "../../api/queries";
 import { DomainLink } from "../../components/DomainLink";
+import { OperationButton, textButton } from "../../components/OperationButton";
 import { DeployBadge, ProcessBadge } from "../../components/Signal";
 import { EmptyNote, Mono, Panel, RevisionStamp, Skeleton } from "../../components/ui";
 import { formatDuration, relativeTime } from "../../lib/time";
@@ -99,7 +101,25 @@ export function OverviewTab({ app }: { app: AppView }) {
       </dl>
 
       <div className="grid items-start gap-6 lg:grid-cols-2">
-        <Panel title="Processes">
+        <Panel
+          title="Processes"
+          action={
+            <OperationButton
+              app={app}
+              request={{
+                op: "ps:scale",
+                app: app.name,
+                formation:
+                  app.formation.length > 0 ? app.formation : [{ type: "web", count: 1 }],
+                skipDeploy: false,
+              }}
+              label="Scale"
+              className={textButton}
+            >
+              Scale
+            </OperationButton>
+          }
+        >
           {app.processes.length === 0 && (
             <EmptyNote>
               {app.status.kind === "not-deployed"
@@ -123,6 +143,14 @@ export function OverviewTab({ app }: { app: AppView }) {
               </li>
             ))}
           </ul>
+          {app.formation.length > 0 && (
+            <p className="border-t border-line px-4 py-2.5 text-xs text-faint">
+              Formation{" "}
+              <Mono className="text-dim">
+                {app.formation.map(formatFormationEntry).join(" ")}
+              </Mono>
+            </p>
+          )}
         </Panel>
 
         <Panel title="Reachability">

@@ -1,6 +1,6 @@
 import { ArrowRight, X } from "lucide-react";
 import type { OperationRequest } from "../../../shared/operations";
-import type { PortMapping } from "../../../shared/types";
+import type { NetworkAttachment, PortMapping } from "../../../shared/types";
 import type { AppView } from "../../api/client";
 import { DomainLink } from "../../components/DomainLink";
 import {
@@ -19,6 +19,12 @@ function Command({ children }: { children: string }) {
     </p>
   );
 }
+
+const attachmentRows = [
+  { property: "initial-network", label: "Initial network" },
+  { property: "attach-post-create", label: "Attach after create" },
+  { property: "attach-post-deploy", label: "Attach after deploy" },
+] as const satisfies readonly { property: NetworkAttachment; label: string }[];
 
 const defaultMapping: PortMapping = { scheme: "http", host: 80, container: 5000 };
 
@@ -225,25 +231,93 @@ export function NetworkTab({ app }: { app: AppView }) {
         <Command>{`dokku ports:report ${app.name}`}</Command>
       </Panel>
 
-      <Panel title="Attached networks">
-        {app.networks.length === 0 && <EmptyNote>No networks attached.</EmptyNote>}
-        <ul className="divide-y divide-line">
-          {app.networks.map((n) => (
-            <li
-              key={n.name}
-              className="flex items-center justify-between gap-3 px-4 py-2.5"
-            >
-              <Mono>{n.name}</Mono>
-              {n.alias ? (
-                <span className="text-xs text-dim">
-                  alias <Mono className="text-fg">{n.alias}</Mono>
-                </span>
+      <Panel
+        title="Attached networks"
+        action={
+          <OperationButton
+            app={app}
+            request={{
+              op: "network:alias-add",
+              app: app.name,
+              alias: "",
+              rebuild: false,
+            }}
+            label="Add alias"
+            className={textButton}
+          >
+            Add alias
+          </OperationButton>
+        }
+      >
+        <dl className="divide-y divide-line">
+          {attachmentRows.map(({ property, label }) => {
+            const networks = app.attachments[property];
+            return (
+              <div
+                key={property}
+                className="flex items-center justify-between gap-3 px-4 py-2.5"
+              >
+                <div className="min-w-0">
+                  <dt className="label">{label}</dt>
+                  <dd className="flex flex-wrap gap-x-3">
+                    {networks.length > 0 ? (
+                      networks.map((n) => <Mono key={n}>{n}</Mono>)
+                    ) : (
+                      <span className="text-faint">none</span>
+                    )}
+                  </dd>
+                </div>
+                <OperationButton
+                  app={app}
+                  request={{
+                    op: "network:set",
+                    app: app.name,
+                    property,
+                    networks,
+                    rebuild: false,
+                  }}
+                  label={`Edit ${label}`}
+                  className={textButton}
+                >
+                  Edit
+                </OperationButton>
+              </div>
+            );
+          })}
+          <div className="flex flex-col gap-1.5 px-4 py-2.5">
+            <dt className="label">Aliases</dt>
+            <dd>
+              {app.aliases.length > 0 ? (
+                <ul className="flex flex-col">
+                  {app.aliases.map((alias) => (
+                    <li key={alias} className="flex items-center justify-between gap-3">
+                      <Mono>{alias}</Mono>
+                      <OperationButton
+                        app={app}
+                        request={{
+                          op: "network:alias-remove",
+                          app: app.name,
+                          alias,
+                          rebuild: false,
+                        }}
+                        label={`Remove alias ${alias}`}
+                        className={removeButton}
+                      >
+                        <X className="size-4" aria-hidden="true" />
+                      </OperationButton>
+                    </li>
+                  ))}
+                </ul>
               ) : (
-                <span className="text-xs text-faint">no alias</span>
+                <span className="text-faint">none</span>
               )}
-            </li>
-          ))}
-        </ul>
+            </dd>
+          </div>
+        </dl>
+        <p className="border-t border-line px-4 py-2.5 text-xs text-faint">
+          Attach settings and aliases apply on the next deploy or rebuild; the running
+          container keeps the networks it has until then.
+        </p>
         <Command>{`dokku network:report ${app.name}`}</Command>
       </Panel>
     </div>
