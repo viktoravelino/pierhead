@@ -37,6 +37,34 @@ attach_network() {
   dokku ps:rebuild "$1" >/dev/null
 }
 
+# install_plugin NAME URL: idempotently install a Dokku plugin at the version the lab host
+# runs (2.2.0 for the datastore plugins). `dokku` here is `docker exec` as root, which
+# `plugin:install` needs; the restricted `dokku` ssh user cannot run it.
+install_plugin() {
+  if dokku plugin:list | awk '{print $1}' | grep -qx "$1"; then
+    echo "plugin $1 already installed"
+  else
+    dokku plugin:install "$2" --committish "${3:-2.2.0}" --name "$1"
+  fi
+}
+
+# seed_service TYPE NAME: idempotently create a datastore service. The first postgres or
+# redis service pulls its image (timescale/timescaledb is about 1 GB), which is why a first
+# run takes minutes.
+seed_service() {
+  if dokku "$1:exists" "$2" >/dev/null 2>&1; then
+    echo "service $2 already exists"
+  else
+    dokku "$1:create" "$2" >/dev/null
+  fi
+}
+
+# link_service TYPE NAME APP: link unless already linked. --no-restart: the app keeps its
+# running container, as with the seeded config vars.
+link_service() {
+  dokku "$1:linked" "$2" "$3" >/dev/null 2>&1 || dokku "$1:link" "$2" "$3" --no-restart >/dev/null
+}
+
 up() {
   mkdir -p .dev/ssh .dev/state
   [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N "" -C pierhead-dev -f "$KEY"
@@ -82,6 +110,14 @@ up() {
   attach_network hello attach-post-deploy
   attach_network hello-multi initial-network
 
+  # Datastore plugins and two services for the Services page: hello-db (postgres) linked to
+  # hello-multi, hello-cache (redis) linked to nothing.
+  install_plugin postgres https://github.com/dokku/dokku-postgres.git
+  install_plugin redis https://github.com/dokku/dokku-redis.git
+  seed_service postgres hello-db
+  seed_service redis hello-cache
+  link_service postgres hello-db hello-multi
+
   docker compose up -d --build pierhead
   cat <<MSG
 
@@ -99,6 +135,13 @@ reset() {
   if docker compose ps --status running --services 2>/dev/null | grep -qx dokku; then
     for app in $(dokku apps:list 2>/dev/null | tail -n +2); do
       dokku apps:destroy "$app" --force || true
+    done
+    # Services are sibling containers too (and restart: always). Destroying an app unlinks
+    # its services, which `<type>:destroy` needs.
+    for type in postgres redis; do
+      for service in $(dokku "$type:list" --format json 2>/dev/null | tr -d '[]"' | tr ',' ' '); do
+        dokku "$type:destroy" "$service" --force || true
+      done
     done
   fi
   docker compose down -v --remove-orphans
