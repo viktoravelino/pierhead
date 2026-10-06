@@ -108,13 +108,19 @@ export async function fetchServiceDsn(type: string, name: string) {
  * so a failure is an error here and never a half-written file.
  */
 export async function downloadServiceExport(type: string, name: string) {
-  const res = await jsonOrUnreachable(
-    `/api/services/${encoded(type)}/${encoded(name)}/export`,
-    { method: "POST", headers: { "X-Pierhead-Request": "export" } },
-  );
+  // Not `jsonOrUnreachable`: a dump is not JSON, and that wrapper would call it unreachable.
+  const res = await fetch(`/api/services/${encoded(type)}/${encoded(name)}/export`, {
+    method: "POST",
+    headers: { "X-Pierhead-Request": "export" },
+  });
   if (!res.ok) {
-    const body: ApiFailure = await res.json();
-    throw new ApiError(res.status, body.error.kind, body.error.message);
+    const body: ApiFailure | null = await res.json().catch(() => null);
+    throw new ApiError(
+      res.status,
+      body?.error.kind ?? "unreachable",
+      body?.error.message ??
+        `The backend answered HTTP ${res.status} without a JSON body.`,
+    );
   }
   const file =
     /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ??
