@@ -171,7 +171,7 @@ export const operationUi = {
     pending: "Destroying...",
     done: "Destroyed the network {target}.",
     effect:
-      "Removes the Docker network. Pierhead refuses while any app's attach settings still name it.",
+      "Removes the Docker network. Pierhead refuses while any app's attach settings still name it, and Docker refuses while a running container is still connected: after detaching an app, rebuild it first.",
     tone: "danger",
   },
   "network:set": {

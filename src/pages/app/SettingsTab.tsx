@@ -175,22 +175,22 @@ function resourceRows(app: AppView): ResourceEntry[] {
 function ResourcesPanel({ app }: { app: AppView }) {
   return (
     <Panel title="Resources">
-      <div className="grid grid-cols-[minmax(5rem,0.6fr)_1fr_1fr] gap-x-3 gap-y-px bg-line">
+      <div className="grid grid-cols-[minmax(5rem,0.6fr)_1fr_1fr] gap-px bg-line">
         {["Process type", "Limit", "Reservation"].map((heading) => (
-          <span key={heading} className="label bg-panel px-4 py-2 first:pr-0 last:pl-0">
+          <span key={heading} className="label bg-panel px-4 py-2">
             {heading}
           </span>
         ))}
         {resourceRows(app).map((row) => (
           <div key={row.processType ?? "_default_"} className="contents">
-            <span className="flex items-center bg-panel py-2.5 pl-4">
+            <span className="flex items-center bg-panel px-4 py-2.5">
               {row.processType ? (
                 <Mono>{row.processType}</Mono>
               ) : (
                 <span className="text-dim">All types</span>
               )}
             </span>
-            <div className="bg-panel py-2">
+            <div className="bg-panel px-3 py-2">
               <ResourceCell
                 app={app}
                 kind="limit"
@@ -198,7 +198,7 @@ function ResourcesPanel({ app }: { app: AppView }) {
                 values={row.limit}
               />
             </div>
-            <div className="bg-panel py-2 pr-4">
+            <div className="bg-panel px-3 py-2">
               <ResourceCell
                 app={app}
                 kind="reserve"

@@ -303,6 +303,8 @@ Reused as is: the writes context and read-only badge, the SSE reader in `src/api
 
 *Implementation note (PR 1):* the activity recorder is not part of it, so the map `proxy:disable` clears is kept in server memory (returned as `AppDetail.previousPorts`) instead of in the activity record, and the Settings tab exists with only the Danger zone until PR 2. The Caddy `basic_auth` README note is also still open.
 
+*Implementation note (PR 2):* aliases are two operations, `network:alias-add` and `network:alias-remove` (not `network:alias`), so each builds its command without reading state; `AppDetail.aliases` lists them and `AppNetwork.alias` stays null since an alias applies to every network. `builder:set` also covers `dockerfile-path` (it runs `builder-dockerfile:set`), resources use `resource:set`/`resource:clear` with a blank memory or cpu left alone, `storage:mount` runs `storage:create` then `storage:mount`, and `ps:scale` is refused for a never-deployed app. `network:destroy` also refuses networks Dokku did not create, and Docker still refuses (502) while a running container is connected.
+
 | PR | Delivers | Size |
 | --- | --- | --- |
 | 1. Framework and routing | `shared/operations.ts` with the four existing actions moved in, `POST /api/operations/:op`, `OperationHost` and the field renderer, the activity recorder (file plus memory, no UI yet), create app, destroy app, domains, ports, proxy enable/disable/build-config, README section and the Caddy `basic_auth` note. Ships only after the Caddyfile change is live. | L |
