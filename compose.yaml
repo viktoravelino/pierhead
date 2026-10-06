@@ -48,6 +48,8 @@ services:
       DOKKU_SSH_USER: dokku
       DOKKU_SSH_KEY: /run/dev-ssh/id_ed25519
       DOKKU_SSH_KNOWN_HOSTS: /run/dev-state/known_hosts
+      # The activity log and saved proxy state; the same gitignored .dev/state as known_hosts.
+      PIERHEAD_STATE_DIR: /run/dev-state
       # Allow start/stop/restart/rebuild. Safe here only because this Dokku is the
       # throwaway local one above; leave it unset (read-only) for any real host.
       PIERHEAD_ALLOW_WRITES: "true"

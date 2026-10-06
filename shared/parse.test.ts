@@ -497,6 +497,34 @@ describe("builds:list", () => {
     expect(new Set(records.map((r) => r.kind))).toEqual(new Set(["build", "deploy"]));
   });
 
+  test("a running record, as Dokku prints it mid-build, has no end and no exit code", () => {
+    const running = JSON.stringify([
+      {
+        id: "muwb3gxtjejsh3",
+        app: "pr3-app",
+        kind: "build",
+        pid: 4813,
+        started_at: "2026-10-06T06:37:15.543610715Z",
+        status: "running",
+        source: "git:sync",
+        display_status: "running",
+        duration: "6s",
+        log_path: "/var/lib/dokku/data/builds/pr3-app/muwb3gxtjejsh3.log",
+      },
+    ]);
+    expect(parseBuilds(running)).toEqual([
+      {
+        id: "muwb3gxtjejsh3",
+        kind: "build",
+        source: "git:sync",
+        status: "running",
+        startedAt: "2026-10-06T06:37:15.543610715Z",
+        finishedAt: null,
+        exitCode: null,
+      },
+    ]);
+  });
+
   test("an app without records prints nothing, and an unknown status or kind is tolerated", () => {
     expect(parseBuilds("")).toEqual([]);
     expect(parseBuilds("[]")).toEqual([]);

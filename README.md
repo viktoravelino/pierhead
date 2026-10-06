@@ -29,7 +29,9 @@ The UI reads either fixtures or the backend, chosen at build time by `VITE_DATA_
 | Networks page: Docker networks, the apps attached to each and how (`GET /api/networks`) | `network:list` plus the all-apps `network:report` |
 | Host page: Dokku version, global domain, proxy, scheduler, builder, deploy branch, plugins, SSH key names and fingerprints, pierhead's own config (`GET /api/host`) | `version`, five `--global` reports, `plugin:list`, `ssh-keys:list` |
 | Start, Stop, Restart, Rebuild, set/unset config vars | Dokku, when writes are enabled (see below); refused otherwise |
-| Deploy history, activity, backups | Not shown (no source yet); the Activity page is hidden from the nav |
+| Deploy history on the app Overview (the last 20 records, each with its log) | `builds:list` and `builds:output` (see "Deploys, builds and activity") |
+| Overview activity feed and the Activity page | pierhead's own operation log merged with the builds Dokku recorded |
+| Backups | Not shown (no source yet); the mock's backup tile is hidden |
 
 ## Scripts
 
@@ -71,7 +73,7 @@ Dokku's SSH port is not published; the `pierhead-dev` container reaches it as `d
 
 Seeded apps: `hello` (running, a few fake config vars), `hello-stopped` (deployed, then stopped), `hello-multi` (two domains, port mapping `http:8081:80`), `hello-new` (never deployed), all from `nginx:alpine`. The network `hello-net` is attached to `hello` (`attach-post-deploy`) and `hello-multi` (`initial-network`).
 
-What gets created: containers `pierhead-dokku`, `pierhead-glances`, `pierhead-dev` and the apps' sibling containers (`hello.web.1` and so on, labelled `pierhead.dev=1`); the Docker network `hello-net`; volumes `pierhead_dokku-data` and `pierhead_node-modules`; and the gitignored `.dev/` directory with the dev SSH keypair (`.dev/ssh`) and `known_hosts` (`.dev/state`). The first start takes a bit longer while `bun install` fills the `node_modules` volume.
+What gets created: containers `pierhead-dokku`, `pierhead-glances`, `pierhead-dev` and the apps' sibling containers (`hello.web.1` and so on, labelled `pierhead.dev=1`); the Docker network `hello-net`; volumes `pierhead_dokku-data` and `pierhead_node-modules`; and the gitignored `.dev/` directory with the dev SSH keypair (`.dev/ssh`) and `known_hosts` (`.dev/state`, which also holds the activity log). The first start takes a bit longer while `bun install` fills the `node_modules` volume.
 
 Docker-in-Docker notes: Dokku talks to the host Docker socket, so apps are sibling containers. Dokku passes `DOKKU_HOST_ROOT` / `DOKKU_LIB_HOST_ROOT` to the daemon as bind-mount sources, so they must be paths on the daemon's filesystem. `compose.yaml` stores Dokku's data in a named volume and points both at that volume's `_data` directory (`/var/lib/docker/volumes/...`), which exists inside OrbStack's VM. On Docker Desktop or native Linux the same paths work; only a bind mount from a macOS path would break.
 
@@ -102,6 +104,7 @@ Server environment:
 | `DOKKU_SSH_TIMEOUT_MS` | `10000` | Default per-command timeout (operations and config writes get 120 s) |
 | `PIERHEAD_ALLOW_WRITES` | unset (read-only) | Only the literal `true` allows operations and config changes |
 | `PIERHEAD_CACHE_TTL_MS` | `5000` | Read cache lifetime; `0` turns it off |
+| `PIERHEAD_STATE_DIR` | `.dev/state` (the image sets `/var/lib/pierhead`; compose sets the dev state dir) | Where pierhead keeps its activity log and saved proxy state; see "Deploys, builds and activity" |
 | `GLANCES_URL` | unset (metrics off) | Glances base URL, e.g. `http://glances:61208` |
 | `PIERHEAD_STATIC_DIR`, `NODE_ENV` | unset | Serve the built UI from this directory, or from `dist/` when `NODE_ENV=production` |
 | `PORT` | `3001` | API port |
@@ -110,19 +113,40 @@ The server checks these at startup and exits with a readable message when one is
 
 ## Operations and the write switch
 
-`POST /api/operations/:op` runs one row of the table in `shared/operations.ts`: `ps:start`, `ps:stop`, `ps:restart`, `ps:rebuild`, `apps:create`, `apps:destroy`, `domains:add|remove|set`, `ports:add|remove|set`, `proxy:enable|disable`, `ps:scale`, `network:create|destroy|set`, `network:alias-add|alias-remove`, `builder:set`, `resource:set|clear` and `storage:mount|unmount`. The body is JSON, `{ app, ... }` per operation; the table says how each is parsed, which Dokku commands it runs and whether it streams. The server refuses with `403 writes-disabled` unless it was started with the literal `PIERHEAD_ALLOW_WRITES=true`; the default is read-only, and `GET /api/health` reports `writesEnabled`. Never set it for a real host without meaning to.
+`POST /api/operations/:op` runs one row of the table in `shared/operations.ts`: `ps:start`, `ps:stop`, `ps:restart`, `ps:rebuild`, `apps:create`, `apps:destroy`, `domains:add|remove|set`, `ports:add|remove|set`, `proxy:enable|disable`, `ps:scale`, `network:create|destroy|set`, `network:alias-add|alias-remove`, `git:from-image`, `git:sync`, `git:set` (the deploy branch), `builder:set`, `resource:set|clear` and `storage:mount|unmount`. The body is JSON, `{ app, ... }` per operation; the table says how each is parsed, which Dokku commands it runs and whether it streams. The server refuses with `403 writes-disabled` unless it was started with the literal `PIERHEAD_ALLOW_WRITES=true`; the default is read-only, and `GET /api/health` reports `writesEnabled`. Never set it for a real host without meaning to.
 
 - Quick operations answer `{ ok: true, output }` once Dokku is done (about 25s for start and restart, 1s for stop, 1-2s for create, domains and ports). Dokku exits 0 when start, stop or restart did nothing (start on a running app, anything on a never-deployed one); the server turns that into `409` with Dokku's message.
-- Rebuild, a proxy toggle on a deployed app, `ps:scale` without `skipDeploy`, and `network:set` or an alias change with `rebuild: true` stream server-sent events: `output` (`{ line }`) per line, then `end` or `failed`. They keep running if the client disconnects.
+- Rebuild, `git:from-image`, `git:sync` (with or without `build`), a proxy toggle on a deployed app, `ps:scale` without `skipDeploy`, and `network:set` or an alias change with `rebuild: true` stream server-sent events: `output` (`{ line }`) per line, then `end` or `failed`. They keep running if the client disconnects.
 - Free-form values are checked against the grammars in `shared/grammar.ts`: additions (app names, domains, `http`/`https` port mappings) against strict ones, removals and restores against a shell-safety one (they take whatever Dokku holds), and the server checks each step again before ssh.
 - Before anything runs the server reads the live state: Dokku's deploy lock (`apps:locked`; a held lock is `409 deploy-in-progress`, also for the rebuild this server is streaming), then the app's reports. Other refusals: `400 invalid-body`, `400 confirm-mismatch` (destroy needs `confirm` equal to the app name, checked first), `404 not-found`, `409 unavailable` (the app's state rules it out, e.g. start on a running app, domains while the proxy is off), `409 exists` (create), `409 domain-in-use` (another app serves it, also for a dotted new app name), `409 conflict` (removing a domain or set port mapping the app does not have).
-- `proxy:disable` makes Dokku clear the app's port map and its custom domains, and `proxy:enable` brings back only the default domain. The server remembers both in memory when there was something to lose (a restart forgets them) and `GET /api/apps/:name` returns them as `proxyRestore`; `proxy:enable` with `ports` and `domains` sets them again in the same request. Ports Dokku only detected at deploy (`detected: true` in the detail) cannot be removed.
+- `proxy:disable` makes Dokku clear the app's port map and its custom domains, and `proxy:enable` brings back only the default domain. The server saves both in its state directory when there was something to lose (they survive a restart) and `GET /api/apps/:name` returns them as `proxyRestore`; `proxy:enable` with `ports` and `domains` sets them again in the same request. Ports Dokku only detected at deploy (`detected: true` in the detail) cannot be removed.
 - Settings (`network:set`, aliases, `builder:set`, `resource:*`, `storage:*`) only take effect on the next deploy, build or restart; the dialogs say so, and the network ones offer `rebuild: true` to add a `ps:rebuild`. `ps:scale` is refused for a never-deployed app. `network:destroy` is refused (`409 in-use`) while any app's initial, post-create or post-deploy setting names the network, and for networks Dokku did not create; Docker keeps a network while a running container is connected (a detached app's container stays until it is rebuilt); that failure is turned into `409 in-use` too. Storage is limited to directories under `/var/lib/dokku/data/storage` (`storage:mount` creates the directory if needed; unmounting never deletes it, and removing the host directory needs root on the host).
 - Quick Dokku calls share one SSH connection and run at most 8 at a time (sshd allows 10 sessions per connection); streamed commands use their own connection.
-- Every attempt is logged to the server's stdout: `operation op=<id> app=<name> outcome=<ok|refused|failed> in <ms>`.
+- Every attempt is logged to the server's stdout, `operation op=<id> app=<name> outcome=<ok|refused|failed> in <ms>`, and recorded in the activity log (below).
 - A successful operation (and a streamed one, however it ends) drops that app's cache entries, the list and the networks.
 
 In the UI the confirm dialog shows the exact command (built by the same table); the Overview has "Add app" (also in the palette), the Domains & Network tab edits domains, ports and the proxy, the Processes panel scales, the Networks page creates and destroys networks, and Settings holds the Build, Resources and Storage panels and the Danger zone. `GET /api/apps/:name` also returns (the five settings reads may fail alone: the detail then has a `partial` list and those fields empty) `formation`, `canScale`, `builder`, `resources`, `storage`, `aliases` and `attachments`. A read-only server shows a "read-only" badge in the sidebar, disables the controls with the reason and hides the palette's operations.
+
+## Deploys, builds and activity
+
+`git:from-image` takes `{ app, image }` (`registry[:port]/path:tag` or `@sha256:` digest, lowercase, no leading `-`) and `git:sync` takes `{ app, url, ref, build }`: `url` is `https://host/path` or `git@host:path` (no credentials in the URL, no query or fragment, no `file://`, local path, `ssh://` or `git://`), `ref` a branch, tag or commit (empty for the remote's default branch), and `build: true` adds `--build`, which builds and deploys like a push. Without `build` the source is only fetched and nothing changes until the next build. Both stream; either is refused only for an app that is mid-deploy. Private repositories are out of scope: Dokku has no credentials for them unless someone runs `git:auth` or adds its deploy key on the host. `git:set` (`{ app, branch }`, empty clears) sets the deploy branch from the Build panel; the Deploy source panel on the Settings tab opens the two deploy dialogs and shows the image and revision from `git:report`.
+
+| Route | Does |
+| --- | --- |
+| `GET /api/apps/:name/builds` | `{ ok, builds: [{ id, kind, source, status, startedAt, finishedAt, exitCode }] }`: `builds:list <app> --format json`, newest first, at most 20 (Dokku's retention); cached with the app and dropped by any operation on it |
+| `GET /api/apps/:name/builds/:id/output` | `{ ok, lines, truncated }`: `builds:output <app> <id>`, ANSI stripped, the newest 2000 lines; `404 not-found` for an id Dokku lacks |
+| `GET /api/activity?app=&limit=` | `{ ok, activity }`, newest first: `limit` 1 to 500 (default 50), `app` narrows both sources |
+
+`kind` is `build` or `deploy`; `source` is what Dokku says started it (`git:from-image`, `git:sync`, `ps:rebuild`, `ps:restart`, `config-redeploy`, `deploy` for a start). `builds:list` has no sha or image, so the history shows the source instead; the revision and image of the current deploy are on the Settings tab.
+
+**State directory.** `PIERHEAD_STATE_DIR` holds everything pierhead remembers itself, in two files:
+
+- `activity.jsonl`: one JSON line per operation attempt, refused ones included: `at` (when it began), `op`, `app` (null for a network), `target`, `actor`, `outcome` (`ok`, `refused`, `failed`), `durationMs` and a short `message` (why it was refused or failed; for a config change just the key name). Never a config value. `actor` is the `X-Pierhead-User` request header that a proxy in front sets once it has authenticated someone (Caddy: `header_up X-Pierhead-User {http.auth.user.id}`); null when absent. The newest 2000 lines are kept: the file is rewritten once it is 10% over.
+- `proxy-restore.json`: the port map and domains `proxy:disable` cleared (see above), so the enable dialog can restore them after a restart.
+
+The default is `.dev/state` (gitignored; the dev stack and `bun run dev:server` use it, compose sets `/run/dev-state`, the same directory as `known_hosts`). The image sets `/var/lib/pierhead`, owned by uid 1000, the directory the README already asks you to mount a volume on: without a volume the log is lost with the container. A directory the server cannot create or write to is logged at startup and the same state is kept in memory instead.
+
+**The merged feed.** `GET /api/activity` reads the recorded operations and one `builds:list` per app (parallel, cached), and folds a Dokku record into the operation that caused it: the record's start must fall within the operation's run (10 s slack either side), on the same app, for an operation that creates records (start, restart, rebuild, both deploys, a rebuild option, a config change that restarts). The operation's row then carries the record ids in `builds` and the record is not listed again. Everything else is its own `build` row: a `git push`, a CLI deploy, a build from before pierhead was running. Dokku keeps an app's records (pierhead never deletes them) until the app is destroyed; the operation rows stay in the log after a destroy.
 
 ## Config vars
 
@@ -142,7 +166,7 @@ In the UI the confirm dialog shows the exact command (built by the same table); 
 
 ## Read cache
 
-`GET /api/apps`, `GET /api/apps/:name`, `GET /api/apps/:name/config` and `GET /api/networks` are cached in memory for 5 seconds, `GET /api/host` for 60 seconds. Concurrent identical requests share one in-flight load, so polling and several open tabs cost one batch of SSH calls per window instead of one per request. Failed reads are not cached. A successful action or config change drops that app's entries, the list and the networks immediately. `GET /api/health`, host metrics, logs and single config values are never cached. `PIERHEAD_CACHE_TTL_MS` changes the 5-second lifetime; `0` turns off both caches. Changes made outside pierhead (a `git push`, the Dokku CLI) show up within one TTL.
+`GET /api/apps`, `GET /api/apps/:name`, `GET /api/apps/:name/config`, `GET /api/apps/:name/builds` and `GET /api/networks` are cached in memory for 5 seconds, `GET /api/host` for 60 seconds. Concurrent identical requests share one in-flight load, so polling and several open tabs cost one batch of SSH calls per window instead of one per request. Failed reads are not cached. A successful action or config change drops that app's entries, the list and the networks immediately. `GET /api/health`, host metrics, logs and single config values are never cached. `PIERHEAD_CACHE_TTL_MS` changes the 5-second lifetime; `0` turns off both caches. Changes made outside pierhead (a `git push`, the Dokku CLI) show up within one TTL.
 
 ## Revision of apps deployed by `git push`
 
@@ -182,7 +206,7 @@ docker run -d --init -p 127.0.0.1:3001:3001 \
 ```
 
 - The key file must be readable by uid 1000 and not by others (mode 600; ssh refuses it otherwise). Mount it read-only.
-- Host key: the server uses `StrictHostKeyChecking=accept-new`, which writes `known_hosts`. Mount a writable volume on `/var/lib/pierhead` (a fresh named volume inherits the image's ownership); a read-only mount makes the first connection fail. Forget a changed host key by deleting that file.
+- Host key and state: the server uses `StrictHostKeyChecking=accept-new`, which writes `known_hosts`, and keeps its activity log and saved proxy state in the same place. Mount a writable volume on `/var/lib/pierhead` (a fresh named volume inherits the image's ownership); a read-only mount makes the first connection fail. Forget a changed host key by deleting that file.
 - Use `--init` (Compose: `init: true`): the ssh control master is reparented to PID 1. The control socket lives in `/tmp`.
 
 Fallback for a build that is not published: `docker build --platform linux/amd64 -t pierhead:<tag> .` (the flag matters on an arm64 machine), then `docker save pierhead:<tag> | ssh <vm> docker load` and point the service's `image:` at that tag.

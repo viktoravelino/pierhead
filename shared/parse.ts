@@ -192,9 +192,9 @@ const buildStatuses = [
 
 /**
  * `builds:list <app> --format json`: `[{ id, kind, source, status, started_at,
- * finished_at, exit_code, ... }]`, newest first, at most the app's retention (20).
- * `finished_at` is `0001-01-01T00:00:00Z` while a build runs. Records of a kind this
- * does not know are left out.
+ * finished_at, exit_code, ... }]`, newest first, at most the app's retention (20). A
+ * record that is still running has no `finished_at` or `exit_code`. Records of a kind
+ * this does not know are left out.
  */
 export const parseBuilds = (stdout: string): BuildRecord[] =>
   parseObjectList(stdout, "builds:list").flatMap((b) => {
@@ -209,11 +209,7 @@ export const parseBuilds = (stdout: string): BuildRecord[] =>
         source: str(b, "source", "builds:list"),
         status: buildStatuses.find((known) => known === status) ?? "other",
         startedAt: str(b, "started_at", "builds:list"),
-        // Dokku writes year 1 for "not finished yet".
-        finishedAt:
-          Number.isNaN(finished) || new Date(finished).getUTCFullYear() < 2000
-            ? null
-            : new Date(finished).toISOString(),
+        finishedAt: Number.isNaN(finished) ? null : new Date(finished).toISOString(),
         exitCode: typeof b.exit_code === "number" ? b.exit_code : null,
       },
     ];

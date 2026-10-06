@@ -18,7 +18,8 @@ FROM oven/bun:1.4-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends openssh-client \
     && rm -rf /var/lib/apt/lists/* \
-    # known_hosts lives here so a named volume mounted on it starts out writable by `bun`.
+    # known_hosts and the state (activity log, proxy restore) live here, so a named volume
+    # mounted on it starts out writable by `bun`.
     && mkdir -p /var/lib/pierhead && chown bun:bun /var/lib/pierhead
 WORKDIR /app
 COPY --from=build /out/server.js ./server.js
@@ -28,7 +29,9 @@ ENV NODE_ENV=production \
     PORT=3001 \
     PIERHEAD_STATIC_DIR=/app/dist \
     # Trust-on-first-use (accept-new) writes here, so mount a volume on /var/lib/pierhead.
-    DOKKU_SSH_KNOWN_HOSTS=/var/lib/pierhead/known_hosts
+    DOKKU_SSH_KNOWN_HOSTS=/var/lib/pierhead/known_hosts \
+    # Activity log and saved proxy state; lost with the container unless /var/lib/pierhead is a volume.
+    PIERHEAD_STATE_DIR=/var/lib/pierhead
 # Not set here, supply at run time: DOKKU_SSH_HOST, DOKKU_SSH_KEY (a path, readable only by
 # uid 1000), and optionally DOKKU_SSH_PORT, DOKKU_SSH_USER, GLANCES_URL,
 # PIERHEAD_ALLOW_WRITES, PIERHEAD_CACHE_TTL_MS. The ssh control socket goes to /tmp.

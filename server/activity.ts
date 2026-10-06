@@ -6,17 +6,16 @@ import type { Activity, BuildRecord, OperationRecord } from "../shared/types";
 // that operation's row instead of listed again.
 
 /**
- * Operations (and the config changes) that can start a Dokku build or deploy record.
- * Others (domains, ports, a stop...) never do, so a record that merely falls in their
- * time window, such as a `git push` at the same moment, is not theirs.
+ * Operations (and the config changes) that start a Dokku build or deploy record. Checked
+ * against Dokku 0.38: start, restart, rebuild, the two git deploys and a config change
+ * that restarts leave one; stop, scale and the proxy toggles leave none, and neither do
+ * domains or ports. A record that merely falls in the window of one of those, such as a
+ * `git push` at the same moment, is not theirs.
  */
 const deploying: ReadonlySet<string> = new Set([
   "ps:start",
   "ps:restart",
   "ps:rebuild",
-  "proxy:enable",
-  "proxy:disable",
-  "ps:scale",
   "network:set",
   "network:alias-add",
   "network:alias-remove",
