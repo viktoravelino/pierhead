@@ -33,6 +33,7 @@ import {
   listStorageUsers,
 } from "./apps";
 import {
+  buildsCacheTtlMs,
   cacheKeys,
   createReadCache,
   hostCacheTtlMs,
@@ -70,6 +71,9 @@ const cacheTtlMs = loadCacheTtl();
 const readCache = createReadCache(cacheTtlMs);
 // The host page's Dokku read lives longer than the app reads; PIERHEAD_CACHE_TTL_MS=0 still turns it off.
 const hostCache = createReadCache(cacheTtlMs === 0 ? 0 : hostCacheTtlMs);
+// Build records change only when something deploys, which every pierhead operation
+// invalidates; the long lifetime keeps the activity feed's poll from asking every app each time.
+const buildsCache = createReadCache(cacheTtlMs === 0 ? 0 : buildsCacheTtlMs);
 const hostMetrics = createHostMetrics(loadGlancesUrl());
 // The activity log and what a proxy-disabled app had; in memory when the directory is unusable.
 const stateDir = loadStateDir();
@@ -91,12 +95,13 @@ const maxMessage = 200;
 
 /**
  * Who sent a request: the `X-Pierhead-User` a proxy in front sets once it has
- * authenticated someone. Null when absent; trimmed, with control characters dropped.
+ * authenticated someone. Null when absent; trimmed, with control and format characters
+ * (newlines, bidi overrides, zero-width) dropped.
  */
 const actorOf = (c: Context) =>
   c.req
     .header("x-pierhead-user")
-    ?.replace(/\p{Cc}/gu, "")
+    ?.replace(/[\p{Cc}\p{Cf}]/gu, "")
     .trim()
     .slice(0, 100) || null;
 
@@ -147,11 +152,17 @@ const loggedApp = (body: unknown) =>
     ? body.app
     : null;
 
+/** Drops what a change to `app` can alter: its reads, and its build records, which a deploy adds to. */
+const invalidateAppReads = (app: string) => {
+  invalidateApp(readCache, app);
+  buildsCache.invalidate(cacheKeys.builds(app));
+};
+
 /** Drops what a request changed from the read cache: its app, or for a network operation the networks. */
 const invalidateFor = (req: OperationRequest) => {
   const app = appOf(req);
   if (app === null) invalidateNetworks(readCache);
-  else invalidateApp(readCache, app);
+  else invalidateAppReads(app);
 };
 
 /**
@@ -166,6 +177,8 @@ const logConfig = (
   action: "set" | "unset",
   outcome: string,
   startedAt?: number,
+  /** Whether the change restarted the app (a Dokku build record follows); only known once it ran. */
+  restart?: boolean,
 ) => {
   const took = startedAt === undefined ? "" : ` in ${Date.now() - startedAt}ms`;
   console.log(`config app=${app} key=${key} action=${action} outcome=${outcome}${took}`);
@@ -180,6 +193,7 @@ const logConfig = (
     outcome: kind === "ok" ? "ok" : kind === "refused" ? "refused" : "failed",
     durationMs: startedAt === undefined ? 0 : Date.now() - startedAt,
     message: `${key}${reason ? ` ${reason}` : ""}`.slice(0, maxMessage),
+    ...(restart === undefined ? {} : { restart }),
   });
 };
 
@@ -369,8 +383,8 @@ const app = new Hono()
       logConfig(c, name, key, "set", `failed (${result.error.kind})`, startedAt);
       return c.json(configFailure(result.error), configStatus(result.error));
     }
-    invalidateApp(readCache, name);
-    logConfig(c, name, key, "set", "ok", startedAt);
+    invalidateAppReads(name);
+    logConfig(c, name, key, "set", "ok", startedAt, body.restart);
     return c.json({ ok: true, restart: body.restart } as const);
   })
   // `?restart=true` redeploys; anything else passes `--no-restart`. Unsetting a key that
@@ -399,8 +413,8 @@ const app = new Hono()
       logConfig(c, name, key, "unset", `failed (${result.error.kind})`, startedAt);
       return c.json(configFailure(result.error), configStatus(result.error));
     }
-    invalidateApp(readCache, name);
-    logConfig(c, name, key, "unset", "ok", startedAt);
+    invalidateAppReads(name);
+    logConfig(c, name, key, "unset", "ok", startedAt, restart);
     return c.json({ ok: true, restart } as const);
   })
   // Server-sent events: `log` ({ts, process, line}), then one `end` or `failed`
@@ -570,7 +584,7 @@ const app = new Hono()
     const name = c.req.param("name");
     if (!isAppName(name))
       return c.json(invalid("invalid-name", `Invalid app name: ${name}`), 400);
-    const result = await readCache.get(
+    const result = await buildsCache.get(
       cacheKeys.builds(name),
       () => getBuilds(dokku, name),
       (r) => r.ok,
@@ -627,7 +641,7 @@ const app = new Hono()
     // One `builds:list` per app, each cached with the app; an app whose read fails is left out.
     const builds = await Promise.all(
       names.map(async (app) => {
-        const result = await readCache.get(
+        const result = await buildsCache.get(
           cacheKeys.builds(app),
           () => getBuilds(dokku, app),
           (r) => r.ok,

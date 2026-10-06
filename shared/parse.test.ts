@@ -41,7 +41,15 @@ const fixtureText = (name: string) =>
 const detailOf = (
   name: string,
   reports: Parameters<typeof parseAppDetail>[1] extends infer R
-    ? Omit<R, "resource" | "builderDockerfile" | "scale" | "storage" | "dockerOptions">
+    ? Omit<
+        R,
+        | "resource"
+        | "builderDockerfile"
+        | "scale"
+        | "storage"
+        | "dockerOptions"
+        | "locked"
+      >
     : never,
   more: Partial<Parameters<typeof parseAppDetail>[1]> = {},
 ) =>
@@ -51,6 +59,7 @@ const detailOf = (
     scale: '[{"process_type":"web","quantity":1}]',
     storage: "[]",
     dockerOptions: '{"deploy-list":[]}',
+    locked: false,
     ...reports,
     ...more,
   });
@@ -479,7 +488,9 @@ describe("builds:list", () => {
 
   test("reads every record of the real capture, newest first", () => {
     expect(records).toHaveLength(buildsList.length);
-    expect(records[0]).toEqual({
+    // The first is a `git:sync --build` of a missing ref, captured from pr3-fail.
+    expect(records[0]?.status).toBe("abandoned");
+    expect(records[1]).toEqual({
       id: "muwan7kowt3m3s",
       kind: "build",
       source: "ps:rebuild",
@@ -523,6 +534,32 @@ describe("builds:list", () => {
         exitCode: null,
       },
     ]);
+  });
+
+  test("a build that died keeps status running for good; display_status says abandoned", () => {
+    const [record] = parseBuilds(
+      JSON.stringify([
+        {
+          id: "muwbrreqv4ru9v",
+          app: "pr3-fail",
+          kind: "build",
+          pid: 689805,
+          started_at: "2026-10-06T06:56:08.855146395Z",
+          status: "running",
+          source: "git:sync",
+          display_status: "abandoned",
+          duration: "1s",
+        },
+      ]),
+    );
+    expect(record).toMatchObject({
+      status: "abandoned",
+      finishedAt: null,
+      exitCode: null,
+    });
+    expect(parseBuilds(JSON.stringify(buildsList)).map((r) => r.status)).toContain(
+      "abandoned",
+    );
   });
 
   test("an app without records prints nothing, and an unknown status or kind is tolerated", () => {

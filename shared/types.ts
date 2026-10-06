@@ -138,6 +138,8 @@ export type AppDetail = AppCommon & {
   formation: FormationEntry[];
   /** False when `ps:report` says Dokku will not scale the app. */
   canScale: boolean;
+  /** Whether Dokku's deploy lock is held (a deploy runs, or a failed one left it). */
+  locked: boolean;
   builder: BuilderSettings;
   git: GitSettings;
   resources: ResourceEntry[];
@@ -323,7 +325,14 @@ export type HostDetails = {
   pierhead: PierheadConfig;
 };
 
-export type BuildStatus = "running" | "succeeded" | "failed" | "canceled" | "other";
+/** `abandoned`: a record whose build died without Dokku closing it (a failed `git:sync`), which `status` keeps calling running. */
+export type BuildStatus =
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "abandoned"
+  | "canceled"
+  | "other";
 
 /** One record of Dokku's `builds` plugin: a build or a deploy of an app, as `builds:list` prints it. */
 export type BuildRecord = {
@@ -357,6 +366,8 @@ export type OperationRecord = {
   durationMs: number;
   /** Why it was refused or failed; short, empty for `ok`. */
   message: string;
+  /** Config changes only: whether it restarted (redeployed) the app, which is what leaves a Dokku build record. */
+  restart?: boolean;
 };
 
 /**

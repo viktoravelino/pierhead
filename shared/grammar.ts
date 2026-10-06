@@ -229,10 +229,16 @@ export const isGitUrl = (url: string) =>
 /**
  * A branch, tag or commit for `git:sync` and `deploy-branch`: `/`-separated words of
  * letters, digits, dots, underscores and hyphens; not starting with `-`, no `..`, no
- * empty segment.
+ * empty segment, and none git itself refuses in a ref name (a segment starting with `.`
+ * or ending in `.` or `.lock`).
  */
 export const isGitRef = (ref: string) =>
   ref.length <= 255 &&
   /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(ref) &&
   !ref.startsWith("-") &&
-  !ref.includes("..");
+  !ref.includes("..") &&
+  ref
+    .split("/")
+    .every(
+      (part) => !part.startsWith(".") && !part.endsWith(".") && !part.endsWith(".lock"),
+    );

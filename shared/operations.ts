@@ -88,6 +88,8 @@ type OperationArgs = {
   };
   "network:alias-add": { app: string; alias: string; rebuild: boolean };
   "network:alias-remove": { app: string; alias: string; rebuild: boolean };
+  /** Releases Dokku's deploy lock, which a failed deploy can leave held; the server refuses while a build record is running. */
+  "apps:unlock": { app: string };
   /** Replaces the app's code with a public image and deploys it. */
   "git:from-image": { app: string; image: string };
   /** Fetches a repository into the app; `build` also builds and deploys it. An empty `ref` is the remote's default branch. */
@@ -129,6 +131,8 @@ export type Availability = { ok: true } | { ok: false; reason: string };
 export type AppState = Pick<AppSummary, "status" | "revision" | "proxyEnabled"> & {
   /** `ps:report`'s `can-scale`; unknown (omitted) counts as scalable. */
   canScale?: boolean;
+  /** Whether the deploy lock is held; unknown (omitted) counts as free. */
+  locked?: boolean;
 };
 
 type OperationDef<K extends OperationId> = {
@@ -530,6 +534,14 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
     ],
     streams: ({ rebuild }) => rebuild,
     availability: unlessDeploying(),
+  },
+  "apps:unlock": {
+    parse: appBody("apps:unlock"),
+    commands: ({ app }) => [step("apps:unlock", app)],
+    streams: false,
+    // Not behind `unlessDeploying`: a held lock is exactly what this is for.
+    availability: ({ locked }) =>
+      locked ? available : unavailable("No deploy lock is held."),
   },
   "git:from-image": {
     parse: parseBody((body) => {

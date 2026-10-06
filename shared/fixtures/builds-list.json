@@ -1,5 +1,17 @@
 [
   {
+    "id": "muwbrreqv4ru9v",
+    "app": "pr3-fail",
+    "kind": "build",
+    "pid": 689805,
+    "started_at": "2026-10-06T06:56:08.855146395Z",
+    "status": "running",
+    "source": "git:sync",
+    "display_status": "abandoned",
+    "duration": "12s",
+    "log_path": "/var/lib/dokku/data/builds/pr3-fail/muwbrreqv4ru9v.log"
+  },
+  {
     "id": "muwan7kowt3m3s",
     "app": "hello",
     "kind": "build",

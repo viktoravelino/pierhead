@@ -147,6 +147,8 @@ export function BuildBadge({ status }: { status: BuildStatus }) {
       return <Signal tone="ok" label="Succeeded" />;
     case "failed":
       return <Signal tone="crit" label="Failed" />;
+    case "abandoned":
+      return <Signal tone="crit" label="Abandoned" />;
     case "running":
       return <Signal tone="warn" label="Running" pulse />;
     case "canceled":

@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFileSync, chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OperationRecord } from "../shared/types";
@@ -73,6 +80,21 @@ describe("the activity log", () => {
     ]);
   });
 
+  test("compaction replaces the file whole, leaving no temp file behind", () => {
+    const store = createStateStore(dir, { maxEntries: 10 });
+    for (let i = 0; i < 12; i++) store.record(entry(i));
+    expect(readdirSync(dir).sort()).toEqual(["activity.jsonl"]);
+  });
+
+  test("keeps a config change's restart flag through a restart", () => {
+    const store = createStateStore(dir);
+    store.record(entry(1, { op: "config:set", message: "KEY", restart: true }));
+    store.record(entry(2));
+    const [plain, config] = createStateStore(dir).recent();
+    expect(config?.restart).toBe(true);
+    expect(plain && "restart" in plain).toBe(false);
+  });
+
   test("records exactly the fields it is given", () => {
     const store = createStateStore(dir);
     store.record(entry(1, { op: "config:set", message: "DATABASE_URL" }));
@@ -95,6 +117,19 @@ describe("the proxy restore state", () => {
     expect(createStateStore(dir).restoreOf("hello")).toEqual(saved);
     store.clearRestore("hello");
     expect(createStateStore(dir).restoreOf("hello")).toBeUndefined();
+  });
+
+  test("a damaged file is ignored with a warning and costs neither the log nor later saves", () => {
+    appendFileSync(join(dir, "proxy-restore.json"), "{not json");
+    const warnings: string[] = [];
+    const store = createStateStore(dir, { warn: (m) => warnings.push(m) });
+    expect(warnings).toHaveLength(1);
+    expect(store.persistent).toBe(true);
+    store.record(entry(1));
+    store.saveRestore("hello", saved);
+    const reopened = createStateStore(dir);
+    expect(reopened.recent()).toHaveLength(1);
+    expect(reopened.restoreOf("hello")).toEqual(saved);
   });
 
   test("ignores a malformed file", () => {

@@ -201,6 +201,15 @@ export const operationUi = {
       "Stops the name resolving to the app's containers once it is redeployed; the running container keeps it until then.",
     tone: "danger",
   },
+  "apps:unlock": {
+    label: "Release lock",
+    title: "Release the deploy lock of {target}?",
+    pending: "Releasing...",
+    done: "Released the deploy lock of {target}.",
+    effect:
+      "Removes the lock a failed deploy left behind, so operations on the app work again. Pierhead refuses while Dokku has a build or deploy record still running for the app: releasing the lock under a deploy that is really under way lets a second one start on top of it.",
+    tone: "danger",
+  },
   "git:from-image": {
     label: "Deploy image",
     title: "Deploy an image to {target}",
@@ -216,7 +225,7 @@ export const operationUi = {
     pending: "Syncing...",
     done: "Synced {target} from git.",
     effect:
-      "Clones or fetches the repository into the app. Built and deployed, it replaces the running containers like a push does; without the build the source is only fetched and nothing changes until the next build. Public https repositories only: Dokku holds no credentials for private ones.",
+      "Clones or fetches the repository into the app. Built and deployed, it replaces the running containers like a push does; without the build the source is only fetched and nothing changes until the next build. The Dokku host fetches the URL itself, with its own network access and keys, so a private repository works only if the host has credentials for it. A build that fails can leave Dokku's deploy lock held, which refuses every other operation until it is released from the Settings tab.",
     tone: "neutral",
   },
   "git:set": {

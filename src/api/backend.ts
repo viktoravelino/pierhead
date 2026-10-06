@@ -1,8 +1,8 @@
 import { queryOptions } from "@tanstack/react-query";
-import { hc } from "hono/client";
+import { hc, type InferResponseType } from "hono/client";
 import type { AppType } from "../../server/index";
 import type { OperationOutputEvent, OperationRequest } from "../../shared/operations";
-import type { Activity, LogEndEvent, LogEvent } from "../../shared/types";
+import type { LogEndEvent, LogEvent } from "../../shared/types";
 import type { LogHandlers } from "./client";
 
 /**
@@ -116,17 +116,14 @@ export async function fetchBuildOutput(name: string, id: string) {
   return { lines: body.lines, truncated: body.truncated };
 }
 
-/** What `GET /api/activity` answers with. */
-type ActivityBody =
-  | { ok: true; activity: Activity[] }
-  | { ok: false; error: ApiErrorBody };
-
-/** Newest-first activity, for one app when `app` is given. */
-export async function fetchActivity(app?: string) {
+/** Newest-first activity, for one app when `app` is given, at most `limit` rows. */
+export async function fetchActivity(app?: string, limit?: number) {
   // Not `backend.api.activity.$get`: the route reads its query by hand, so the client types none.
-  const query = app === undefined ? "" : `?app=${encodeURIComponent(app)}`;
-  const res = await jsonOrUnreachable(`/api/activity${query}`);
-  const body: ActivityBody = await res.json();
+  const query = new URLSearchParams();
+  if (app !== undefined) query.set("app", app);
+  if (limit !== undefined) query.set("limit", String(limit));
+  const res = await jsonOrUnreachable(`/api/activity?${query}`);
+  const body: InferResponseType<typeof backend.api.activity.$get> = await res.json();
   if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
   return body.activity;
 }

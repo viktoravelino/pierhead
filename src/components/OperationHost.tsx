@@ -607,7 +607,7 @@ function Fields({
             label="Repository"
             value={request.url}
             placeholder="https://github.com/owner/repo"
-            hint="An https:// URL, or git@host:path with a deploy key. No credentials in the URL."
+            hint="An https:// URL or git@host:path, fetched by the Dokku host with its own network and keys. No credentials in the URL."
             onChange={(url) => onChange({ ...request, url })}
           />
           <TextField
@@ -741,6 +741,7 @@ function Fields({
     case "domains:remove":
     case "ports:remove":
     case "proxy:disable":
+    case "apps:unlock":
       return null;
   }
 }

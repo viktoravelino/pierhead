@@ -32,7 +32,7 @@ const outcomes = ["ok", "refused", "failed"] as const;
 /** Narrows one parsed line; a line that does not fit (a hand edit, a torn write) is skipped. */
 function toOperationRecord(value: unknown): OperationRecord | null {
   if (!isRecord(value)) return null;
-  const { at, op, app, target, actor, outcome, durationMs, message } = value;
+  const { at, op, app, target, actor, outcome, durationMs, message, restart } = value;
   const known = outcomes.find((o) => o === outcome);
   if (
     typeof at !== "string" ||
@@ -43,11 +43,22 @@ function toOperationRecord(value: unknown): OperationRecord | null {
     (typeof actor !== "string" && actor !== null) ||
     known === undefined ||
     typeof durationMs !== "number" ||
-    typeof message !== "string"
+    typeof message !== "string" ||
+    (restart !== undefined && typeof restart !== "boolean")
   ) {
     return null;
   }
-  return { at, op, app, target, actor, outcome: known, durationMs, message };
+  return {
+    at,
+    op,
+    app,
+    target,
+    actor,
+    outcome: known,
+    durationMs,
+    message,
+    ...(restart === undefined ? {} : { restart }),
+  };
 }
 
 const isRestore = (value: unknown): value is ProxyRestore =>
@@ -95,29 +106,42 @@ export function createStateStore(
           }
         });
       }
-      const saved = join(dir, restoreFile);
-      if (existsSync(saved)) {
-        const parsed: unknown = JSON.parse(readFileSync(saved, "utf8"));
-        if (isRecord(parsed)) {
-          for (const [app, value] of Object.entries(parsed)) {
-            if (isRestore(value)) restores.set(app, value);
-          }
-        }
-      }
       // Probe for write access now, not at the first operation.
       appendFileSync(log, "");
     } catch (e) {
       fail("opening the state directory", e);
     }
   }
+  // Read on its own: a damaged file must cost the saved restores, not the log or later writes.
+  if (dir !== null) {
+    const saved = join(dir, restoreFile);
+    try {
+      if (existsSync(saved)) {
+        const parsed: unknown = JSON.parse(readFileSync(saved, "utf8"));
+        if (!isRecord(parsed)) throw new Error("not an object");
+        for (const [app, value] of Object.entries(parsed)) {
+          if (isRestore(value)) restores.set(app, value);
+        }
+      }
+    } catch (e) {
+      warn(
+        `state: ignoring ${restoreFile} (${e instanceof Error ? e.message : String(e)})`,
+      );
+    }
+  }
   if (persistent) entries = entries.slice(-maxEntries);
+
+  /** Replaces `file` whole: a crash leaves the old content or the new, never half. */
+  const replaceFile = (file: string, content: string) => {
+    const target = join(dir ?? "", file);
+    writeFileSync(`${target}.tmp`, content);
+    renameSync(`${target}.tmp`, target);
+  };
 
   const saveRestores = () => {
     if (!persistent || dir === null) return;
     try {
-      const target = join(dir, restoreFile);
-      writeFileSync(`${target}.tmp`, JSON.stringify(Object.fromEntries(restores)));
-      renameSync(`${target}.tmp`, target);
+      replaceFile(restoreFile, JSON.stringify(Object.fromEntries(restores)));
     } catch (e) {
       fail("saving the proxy restore state", e);
     }
@@ -137,7 +161,10 @@ export function createStateStore(
       try {
         const log = join(dir, activityFile);
         if (fileLines >= maxEntries + Math.ceil(maxEntries / 10)) {
-          writeFileSync(log, `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`);
+          replaceFile(
+            activityFile,
+            `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`,
+          );
           fileLines = entries.length;
         } else {
           appendFileSync(log, `${JSON.stringify(entry)}\n`);

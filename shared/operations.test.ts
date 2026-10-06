@@ -100,6 +100,7 @@ const valid = {
     req: { op: "network:alias-remove", app, alias: "api", rebuild: false },
     argv: [["docker-options:remove", app, "deploy", "--network-alias api"]],
   },
+  "apps:unlock": { req: { op: "apps:unlock", app }, argv: [["apps:unlock", app]] },
   "git:from-image": {
     req: {
       op: "git:from-image",
@@ -328,6 +329,31 @@ describe("operations table", () => {
       expect(streamsOutput(valid["git:sync"].req, { status })).toBe(true);
     }
     expect(streamsOutput(valid["git:set"].req, null)).toBe(false);
+  });
+
+  test("apps:unlock is available only while the lock is held, even mid-deploy", () => {
+    const state = {
+      status: { kind: "running" },
+      revision: null,
+      proxyEnabled: true,
+    } as const;
+    expect(operationAvailability("apps:unlock", { ...state, locked: true })).toEqual({
+      ok: true,
+    });
+    expect(operationAvailability("apps:unlock", state)).toMatchObject({ ok: false });
+    expect(
+      operationAvailability("apps:unlock", { ...state, locked: false }),
+    ).toMatchObject({
+      ok: false,
+    });
+    // Everything else is refused while a deploy runs; unlocking is what remains.
+    expect(
+      operationAvailability("apps:unlock", {
+        ...state,
+        status: { kind: "deploying", step: "build" },
+        locked: true,
+      }),
+    ).toEqual({ ok: true });
   });
 
   test("rebuild streams; proxy toggles stream once deployed", () => {

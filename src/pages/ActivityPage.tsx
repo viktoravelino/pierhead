@@ -6,6 +6,9 @@ import { ActivityFeed } from "../components/ActivityFeed";
 import { inputClass } from "../components/FormControls";
 import { PageHeader, Panel } from "../components/ui";
 
+/** The most rows the server returns; the Overview feed keeps the default 50 and shows 7. */
+const pageLimit = 500;
+
 export function ActivityPage() {
   const [app, setApp] = useState("");
   const { data: apps = [] } = useQuery(appsQuery);
@@ -37,7 +40,7 @@ export function ActivityPage() {
         }
       />
       <Panel title="Events" className="max-w-3xl">
-        <ActivityFeed app={app === "" ? undefined : app} />
+        <ActivityFeed app={app === "" ? undefined : app} limit={pageLimit} />
       </Panel>
     </>
   );

@@ -405,6 +405,11 @@ describe("git URLs and refs", () => {
       "a/",
       "$HEAD",
       "a:b",
+      "topic.lock",
+      "a/topic.lock/b",
+      "v1.",
+      ".hidden",
+      "a/.hidden",
     ]) {
       expect(isGitRef(ref)).toBe(false);
     }

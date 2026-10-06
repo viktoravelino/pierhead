@@ -21,8 +21,6 @@ const deploying: ReadonlySet<string> = new Set([
   "network:alias-remove",
   "git:from-image",
   "git:sync",
-  "config:set",
-  "config:unset",
 ]);
 
 /** How far a record's start may precede the operation's start (clock and SSH latency) or follow its end. */
@@ -30,17 +28,44 @@ const slackMs = 10_000;
 
 const startMs = (iso: string) => Date.parse(iso);
 
+/** A config change leaves a record only when it restarted the app (`--no-restart` leaves none). */
+const startsRecords = (op: OperationRecord) =>
+  op.op === "config:set" || op.op === "config:unset"
+    ? op.restart === true
+    : deploying.has(op.op);
+
 /** Whether `record` began while `op` ran, on the same app, and `op` is one that deploys. */
 function caused(op: OperationRecord, app: string, record: BuildRecord) {
-  if (op.app !== app || op.outcome === "refused" || !deploying.has(op.op)) return false;
+  if (op.app !== app || op.outcome === "refused" || !startsRecords(op)) return false;
   const started = startMs(record.startedAt);
   const opStart = startMs(op.at);
   return started >= opStart - slackMs && started <= opStart + op.durationMs + slackMs;
 }
 
 /**
+ * The operation a record belongs to among those whose window holds it: the latest one
+ * that had started by the time the record did (a record cannot be caused by something
+ * that began after it), else the earliest that began just after, which clock skew allows.
+ */
+function ownerOf(candidates: readonly OperationRecord[], record: BuildRecord) {
+  const started = startMs(record.startedAt);
+  const before = candidates.filter((op) => startMs(op.at) <= started);
+  const pick = before.length > 0 ? before : candidates;
+  return (
+    pick.reduce<OperationRecord | null>((best, op) => {
+      if (!best) return op;
+      const closer =
+        before.length > 0
+          ? startMs(op.at) > startMs(best.at)
+          : startMs(op.at) < startMs(best.at);
+      return closer ? op : best;
+    }, null) ?? null
+  );
+}
+
+/**
  * Newest-first rows from `operations` and each app's `builds`. A build record goes to the
- * operation that caused it (the one nearest before it, when windows overlap) and is
+ * operation that caused it (see `ownerOf`, when windows overlap) and is
  * otherwise a row of its own, such as a `git push` or a deploy from the CLI.
  */
 export function mergeActivity(
@@ -52,13 +77,10 @@ export function mergeActivity(
   const standalone: Activity[] = [];
   for (const { app, records } of builds) {
     for (const record of records) {
-      const owner = operations
-        .filter((op) => caused(op, app, record))
-        .reduce<OperationRecord | null>(
-          (nearest, op) =>
-            nearest && startMs(nearest.at) > startMs(op.at) ? nearest : op,
-          null,
-        );
+      const owner = ownerOf(
+        operations.filter((op) => caused(op, app, record)),
+        record,
+      );
       if (owner) claimed.set(owner, [...(claimed.get(owner) ?? []), record.id]);
       else {
         standalone.push({

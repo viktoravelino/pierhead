@@ -45,6 +45,8 @@ type HostOptions = {
   /** Apps holding a deploy lock. */
   locked?: string[];
   extras?: Record<string, Partial<Extras>>;
+  /** What `builds:list <app> --format json` prints, per app; `[]` otherwise. */
+  builds?: Record<string, unknown[]>;
 };
 
 /** `network:list` entries: a Dokku-managed network or one Docker keeps for itself. */
@@ -58,7 +60,7 @@ const dockerNetworks = [
 /** A host with these apps, as Dokku's reports would show them. */
 function fakeHost(
   apps: Record<string, Reports>,
-  { locked = [], extras = {} }: HostOptions = {},
+  { locked = [], extras = {}, builds = {} }: HostOptions = {},
 ): DokkuRun {
   const names = Object.keys(apps);
   const reportOf = (plugin: keyof Reports, app: string | undefined) => {
@@ -85,6 +87,10 @@ function fakeHost(
         return locked.includes(app)
           ? ok("Deploy lock exists")
           : fail("Deploy lock does not exist");
+      case "builds:list":
+        return known
+          ? ok(JSON.stringify(builds[app] ?? []))
+          : fail(`App ${app} does not exist`);
       case "network:list":
         return ok(JSON.stringify(dockerNetworks));
       case "ps:scale":
@@ -222,6 +228,13 @@ describe("preflight: existing apps", () => {
       });
     }
     expect(calls.every((name) => name === "apps:locked")).toBe(true);
+  });
+
+  test("the refusal points at the Settings tab's way out", async () => {
+    const held = fakeHost({ hello: running }, { locked: ["hello"] });
+    expect(await refusal({ op: "ps:restart", app: "hello" }, held)).toMatchObject({
+      message: expect.stringContaining("Release lock"),
+    });
   });
 
   test("a lock check that fails for another reason is a 502", async () => {
@@ -736,5 +749,53 @@ describe("failureRefusal", () => {
       failureRefusal({ op: "network:destroy", network: "x", confirm: "x" }, boom),
     ).toBeNull();
     expect(failureRefusal({ op: "ps:stop", app: "hello" }, active)).toBeNull();
+  });
+});
+
+describe("preflight: apps:unlock", () => {
+  const unlock: OperationRequest = { op: "apps:unlock", app: "hello" };
+  const record = (status: string, display: string) => ({
+    id: "muwb3gxtjejsh3",
+    app: "hello",
+    kind: "build",
+    started_at: "2026-10-06T06:37:15.543610715Z",
+    status,
+    source: "git:sync",
+    display_status: display,
+  });
+
+  test("goes ahead when the lock is held and nothing is running", async () => {
+    const h = fakeHost({ hello: running }, { locked: ["hello"], builds: { hello: [] } });
+    expect(await preflight(h, unlock)).toEqual({ ok: true, app: null });
+  });
+
+  test("a build that died (status running, display abandoned) does not block it", async () => {
+    const h = fakeHost(
+      { hello: running },
+      { locked: ["hello"], builds: { hello: [record("running", "abandoned")] } },
+    );
+    expect((await preflight(h, unlock)).ok).toBe(true);
+  });
+
+  test("a build record that is really running refuses with 409 build-running", async () => {
+    const h = fakeHost(
+      { hello: running },
+      { locked: ["hello"], builds: { hello: [record("running", "running")] } },
+    );
+    expect(await refusal(unlock, h)).toMatchObject({
+      status: 409,
+      kind: "build-running",
+    });
+  });
+
+  test("no lock held is a 409, an unknown app a 404", async () => {
+    const free = fakeHost({ hello: running });
+    expect(await refusal(unlock, free)).toMatchObject({
+      status: 409,
+      kind: "unavailable",
+    });
+    expect(await refusal({ op: "apps:unlock", app: "nosuch" }, free)).toMatchObject({
+      status: 404,
+    });
   });
 });

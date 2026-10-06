@@ -109,4 +109,41 @@ describe("mergeActivity", () => {
     const rows = merge([op(0, { op: "network:create", app: null, target: "net" })], []);
     expect(rows[0]).toMatchObject({ kind: "operation", app: null, target: "net" });
   });
+
+  test("three git:sync within seconds each keep their own record", () => {
+    const sync = (at: number) => op(at, { op: "git:sync", durationMs: 28_000 });
+    const rows = merge(
+      [sync(0), sync(3), sync(6)],
+      [build("r0", 0.5), build("r3", 3.5), build("r6", 6.5)],
+    );
+    const owned = rows.flatMap((r) => (r.kind === "operation" ? [[r.at, r.builds]] : []));
+    expect(owned).toEqual([
+      [t(6), ["r6"]],
+      [t(3), ["r3"]],
+      [t(0), ["r0"]],
+    ]);
+  });
+
+  test("a record is never given to an operation that started after it, unless none had", () => {
+    // The op at 5 s started after the record at 3 s; the one at 0 s had started and is still running.
+    const rows = merge([op(0), op(5)], [build("b1", 3)]);
+    const owner = rows.find((r) => r.kind === "operation" && r.builds.length > 0);
+    expect(owner?.at).toBe(t(0));
+    // With only a later operation inside the slack, it still goes there rather than standing alone.
+    const late = merge([op(5)], [build("b2", 1)]);
+    expect(late).toHaveLength(1);
+    expect(late[0]).toMatchObject({ kind: "operation", builds: ["b2"] });
+  });
+
+  test("a config change claims a record only when it restarted the app", () => {
+    for (const name of ["config:set", "config:unset"]) {
+      const restarted = merge([op(0, { op: name, restart: true })], [build("c1", 1)]);
+      expect(restarted).toHaveLength(1);
+      expect(restarted[0]).toMatchObject({ kind: "operation", builds: ["c1"] });
+      for (const restart of [false, undefined]) {
+        const quiet = merge([op(0, { op: name, restart })], [build("c1", 1)]);
+        expect(quiet.map((r) => r.kind).sort()).toEqual(["build", "operation"]);
+      }
+    }
+  });
 });

@@ -201,6 +201,28 @@ function DeploySourcePanel({ app }: { app: AppView }) {
             )}
           </dd>
         </div>
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+          <div className="min-w-0">
+            <dt className="label">Deploy lock</dt>
+            <dd>
+              {app.locked ? (
+                <span className="text-warn">
+                  Held: a deploy is running, or a failed one left it behind
+                </span>
+              ) : (
+                <span className="text-faint">free</span>
+              )}
+            </dd>
+          </div>
+          <OperationButton
+            app={app}
+            request={{ op: "apps:unlock", app: app.name }}
+            label="Release lock"
+            className={textButton}
+          >
+            Release lock
+          </OperationButton>
+        </div>
       </dl>
       <Note>
         Deploying replaces the running containers. A repository without "build now" is

@@ -374,6 +374,8 @@ const operationSteps = {
   "apps:create": appStep("apps:create"),
   // `--force` skips Dokku's name prompt, which fails without a tty; the route checks the typed name.
   "apps:destroy": appStep("apps:destroy", ["--force"]),
+  // Releases a deploy lock a failed deploy left behind; the route checks no build is running.
+  "apps:unlock": appStep("apps:unlock"),
   "domains:add": listStep("domains:add", domainArg),
   "domains:remove": listStep("domains:remove", domainArg),
   "domains:set": listStep("domains:set", domainArg),

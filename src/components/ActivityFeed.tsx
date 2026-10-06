@@ -5,9 +5,12 @@ import type { ReactNode } from "react";
 import { isOperationId } from "../../shared/operations";
 import type { Activity } from "../../shared/types";
 import { operationUi } from "../api/operations";
-import { activityQuery } from "../api/queries";
+import { activityQuery, appsQuery } from "../api/queries";
 import { formatDuration, relativeTime } from "../lib/time";
 import { EmptyNote, ErrorNote, Mono, Skeleton } from "./ui";
+
+/** How an app is named in a row: a link while the app exists, plain text once it is destroyed. */
+type AppRef = (app: string) => ReactNode;
 
 const appLink = (app: string) => (
   <Link
@@ -20,9 +23,12 @@ const appLink = (app: string) => (
 );
 
 /** What an operation did, as its toast says it: "Rebuilt hello." becomes "Rebuilt hello". */
-function operationText(a: Extract<Activity, { kind: "operation" }>): ReactNode {
+function operationText(
+  a: Extract<Activity, { kind: "operation" }>,
+  appRef: AppRef,
+): ReactNode {
   // Network operations have no app, so their target is not a link.
-  const target = a.app === null ? <Mono>{a.target}</Mono> : appLink(a.app);
+  const target = a.app === null ? <Mono>{a.target}</Mono> : appRef(a.app);
   const known = isOperationId(a.op) ? operationUi[a.op] : null;
   const label = known?.label ?? a.op;
   const [before = "", ...after] = (known?.done ?? `${a.op} {target}.`).split("{target}");
@@ -52,7 +58,10 @@ function operationText(a: Extract<Activity, { kind: "operation" }>): ReactNode {
   }
 }
 
-function describe(a: Activity): { icon: ReactNode; text: ReactNode; tone: "ok" | "bad" } {
+function describe(
+  a: Activity,
+  appRef: AppRef,
+): { icon: ReactNode; text: ReactNode; tone: "ok" | "bad" } {
   const icon = "size-4";
   switch (a.kind) {
     case "operation":
@@ -67,7 +76,7 @@ function describe(a: Activity): { icon: ReactNode; text: ReactNode; tone: "ok" |
           ),
         text: (
           <>
-            {operationText(a)}
+            {operationText(a, appRef)}
             {a.durationMs >= 1000 && (
               <span className="text-faint">
                 {" "}
@@ -86,7 +95,7 @@ function describe(a: Activity): { icon: ReactNode; text: ReactNode; tone: "ok" |
         icon: <Hammer className={icon} aria-hidden="true" />,
         text: (
           <>
-            {build.kind === "build" ? "Build" : "Deploy"} of {appLink(a.app)}{" "}
+            {build.kind === "build" ? "Build" : "Deploy"} of {appRef(a.app)}{" "}
             {build.status === "other" ? "ended" : build.status}{" "}
             <span className="text-dim">
               (<Mono>{build.source}</Mono>)
@@ -101,7 +110,17 @@ function describe(a: Activity): { icon: ReactNode; text: ReactNode; tone: "ok" |
 
 /** Reverse-chronological event list. `limit` trims it for the overview sidebar; `app` narrows it. */
 export function ActivityFeed({ limit, app }: { limit?: number; app?: string }) {
-  const { data, error, isPending, isFetching, refetch } = useQuery(activityQuery(app));
+  const { data, error, isPending, isFetching, refetch } = useQuery(
+    activityQuery(app, limit),
+  );
+  const { data: apps } = useQuery(appsQuery);
+  // Until the list loads every app is treated as there; a destroyed one is plain text.
+  const appRef: AppRef = (name) =>
+    apps === undefined || apps.some((a) => a.name === name) ? (
+      appLink(name)
+    ) : (
+      <Mono className="font-medium">{name}</Mono>
+    );
 
   if (error && !data) {
     return (
@@ -124,7 +143,7 @@ export function ActivityFeed({ limit, app }: { limit?: number; app?: string }) {
   return (
     <ol className="divide-y divide-line">
       {data.slice(0, limit).map((a) => {
-        const { icon, text, tone } = describe(a);
+        const { icon, text, tone } = describe(a, appRef);
         return (
           <li key={a.id} className="flex items-start gap-3 px-4 py-2.5">
             <span className={`mt-0.5 ${tone === "bad" ? "text-crit" : "text-faint"}`}>

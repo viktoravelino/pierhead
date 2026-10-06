@@ -33,11 +33,11 @@ export const hostMetricsQuery = queryOptions({
   refetchInterval: 5_000,
 });
 export const appsQuery = queryOptions({ queryKey: ["apps"], queryFn: getApps, ...poll });
-/** Newest-first activity for the host, or for one app. */
-export const activityQuery = (app?: string) =>
+/** Newest-first activity for the host, or for one app; the server sends 50 rows unless `limit` says more. */
+export const activityQuery = (app?: string, limit?: number) =>
   queryOptions({
-    queryKey: ["activity", app ?? null],
-    queryFn: () => getActivity(app),
+    queryKey: ["activity", app ?? null, limit ?? null],
+    queryFn: () => getActivity(app, limit),
     ...poll,
   });
 export const backupQuery = queryOptions({ queryKey: ["backup"], queryFn: getBackup });

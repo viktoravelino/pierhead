@@ -187,12 +187,13 @@ const buildStatuses = [
   "running",
   "succeeded",
   "failed",
+  "abandoned",
   "canceled",
 ] as const satisfies readonly BuildStatus[];
 
 /**
  * `builds:list <app> --format json`: `[{ id, kind, source, status, started_at,
- * finished_at, exit_code, ... }]`, newest first, at most the app's retention (20). A
+ * finished_at, exit_code, display_status ... }]`, newest first, at most the app's retention (20). A
  * record that is still running has no `finished_at` or `exit_code`. Records of a kind
  * this does not know are left out.
  */
@@ -201,7 +202,12 @@ export const parseBuilds = (stdout: string): BuildRecord[] =>
     const kind = b.kind === "build" || b.kind === "deploy" ? b.kind : null;
     if (kind === null) return [];
     const finished = typeof b.finished_at === "string" ? Date.parse(b.finished_at) : NaN;
-    const status = str(b, "status", "builds:list");
+    // `display_status` is what Dokku shows: a build that died leaves `status` "running"
+    // for good while `display_status` says "abandoned".
+    const status =
+      typeof b.display_status === "string" && b.display_status !== ""
+        ? b.display_status
+        : str(b, "status", "builds:list");
     return [
       {
         id: str(b, "id", "builds:list"),
@@ -390,6 +396,8 @@ export type DetailReports = SummaryReports & {
   storage: string;
   /** `docker-options:report --format json` */
   dockerOptions: string;
+  /** Whether `apps:locked` says the deploy lock is held. */
+  locked: boolean;
 };
 
 export function parseAppSummary(name: string, r: SummaryReports): AppSummary {
@@ -425,6 +433,7 @@ export function parseAppDetail(name: string, r: DetailReports): AppDetail {
     aliases: parseAliases(r.dockerOptions),
     formation: parseFormation(r.scale),
     canScale: r.ps["can-scale"] !== "false",
+    locked: r.locked,
     builder: parseBuilderSettings(r.builder, r.builderDockerfile),
     git: parseGitSettings(r.git),
     resources: parseResources(r.resource),

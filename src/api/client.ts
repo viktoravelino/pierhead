@@ -121,6 +121,7 @@ function toApp(raw: RawApp): AppView {
       count: processes.filter((p) => p.type === type).length,
     })),
     canScale: true,
+    locked: false,
     builder: { selected: null, buildDir: null, dockerfilePath: null },
     git: { deployBranch: null, computedDeployBranch: null, sourceImage: null },
     resources: [],
@@ -242,8 +243,8 @@ const mockActivity = async (app?: string) => {
   return app === undefined ? activity : activity.filter((a) => a.app === app);
 };
 
-/** Newest-first activity for the host, or for one app. */
-export const getActivity: (app?: string) => Promise<Activity[]> =
+/** Newest-first activity for the host, or for one app (the mock ignores `limit`: it has a dozen rows). */
+export const getActivity: (app?: string, limit?: number) => Promise<Activity[]> =
   dataSource === "api" ? fetchActivity : mockActivity;
 
 /** The app's Dokku build and deploy records; "api" mode only (the mock has its own `getDeploys`). */

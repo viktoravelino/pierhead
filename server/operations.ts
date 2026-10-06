@@ -2,7 +2,14 @@ import { formatPortMapping, storageHostPath } from "../shared/grammar";
 import { type OperationRequest, operationAvailability } from "../shared/operations";
 import { stripAnsi } from "../shared/parse";
 import type { AppDetail, PortMapping, ProxyRestore } from "../shared/types";
-import { domainOwners, getApp, isNotFound, listNetworks } from "./apps";
+import {
+  domainOwners,
+  getApp,
+  getBuilds,
+  isNotFound,
+  listNetworks,
+  noLock,
+} from "./apps";
 import type { DokkuError, DokkuRun, DokkuSteps } from "./dokku";
 import type { StateStore } from "./state";
 
@@ -26,9 +33,6 @@ const refused = (status: 409, kind: string, message: string): Preflight => ({
   ok: false,
   refusal: { status, kind, message },
 });
-
-/** Dokku's `apps:locked` text for an app with no deploy lock (it exits 1 then). */
-const noLock = "Deploy lock does not exist";
 
 /**
  * Whether the request makes sense on the host right now, run after the body parsed and
@@ -58,6 +62,8 @@ export async function preflight(
     return networkPreflight(dokku, req);
   }
 
+  if (req.op === "apps:unlock") return unlockPreflight(dokku, req.app);
+
   // Dokku's deploy lock is the only sign of a deploy in progress (no report shows one);
   // it also catches the rebuild or proxy toggle this server is streaming.
   const lock = await dokku("apps:locked", req.app);
@@ -65,7 +71,7 @@ export async function preflight(
     return refused(
       409,
       "deploy-in-progress",
-      `${req.app} holds a deploy lock: a deploy is running, or one died and left it (clear it with \`dokku apps:unlock ${req.app}\`).`,
+      `${req.app} holds a deploy lock: a deploy is running, or a failed one left it behind. Once no build is running, release it from the app's Settings tab (Release lock) or with \`dokku apps:unlock ${req.app}\`.`,
     );
   }
   if (!lock.error.message.includes(noLock)) {
@@ -189,6 +195,32 @@ export async function preflight(
     case "proxy:disable":
       return { ok: true, app };
   }
+}
+
+/**
+ * `apps:unlock`: only while the lock exists and no build record of the app is still
+ * running (a deploy that is really under way holds the lock legitimately). Records of a
+ * build that died read as `abandoned`, not running, so they do not block it.
+ */
+async function unlockPreflight(dokku: DokkuRun, app: string): Promise<Preflight> {
+  const lock = await dokku("apps:locked", app);
+  if (!lock.ok) {
+    if (lock.error.message.includes(noLock)) {
+      return refused(409, "unavailable", `${app} holds no deploy lock.`);
+    }
+    return { ok: false, refusal: failure(lock.error) };
+  }
+  const builds = await getBuilds(dokku, app);
+  if (!builds.ok) return { ok: false, refusal: failure(builds.error) };
+  const running = builds.value.find((b) => b.status === "running");
+  if (running) {
+    return refused(
+      409,
+      "build-running",
+      `${app} has a ${running.kind} still running (${running.source}, started ${running.startedAt}); releasing the lock now would let a second deploy start on top of it.`,
+    );
+  }
+  return { ok: true, app: null };
 }
 
 /**
