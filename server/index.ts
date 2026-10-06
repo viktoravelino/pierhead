@@ -472,6 +472,11 @@ const app = new Hono()
       logOperation(attempt, "refused", "writes-disabled");
       return c.json({ ok: false, error: writeGate.error } as const, 403);
     }
+    // A custom header cannot be sent by a cross-site form, which a POST alone would not stop.
+    if (c.req.header("x-pierhead-request") !== "export") {
+      logOperation(attempt, "refused", "invalid-request");
+      return c.json(invalid("invalid-request", "Start exports from the UI."), 403);
+    }
     const bad = await badServiceParams(type, name);
     if (bad) return c.json(bad.body, bad.status);
     const found = await getService(dokku, type, name);
