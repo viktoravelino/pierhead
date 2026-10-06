@@ -14,6 +14,7 @@ import {
   commandSteps,
   conflictsOnNoOp,
   destructiveConfirm,
+  invalidationOf,
   isOperationId,
   type OperationOutputEvent,
   type OperationRequest,
@@ -158,11 +159,25 @@ const invalidateAppReads = (app: string) => {
   buildsCache.invalidate(cacheKeys.builds(app));
 };
 
-/** Drops what a request changed from the read cache: its app, or for a network operation the networks. */
+/**
+ * Drops what a request changed from the read cache: its apps (a rename touches two), the
+ * networks for a network operation, or for the global settings the host read and every
+ * app's, since their defaults derive from it.
+ */
 const invalidateFor = (req: OperationRequest) => {
-  const app = appOf(req);
-  if (app === null) invalidateNetworks(readCache);
-  else invalidateAppReads(app);
+  const change = invalidationOf(req);
+  switch (change.kind) {
+    case "apps":
+      for (const name of change.apps) invalidateAppReads(name);
+      return;
+    case "networks":
+      invalidateNetworks(readCache);
+      return;
+    case "host":
+      hostCache.invalidate(cacheKeys.host);
+      readCache.clear();
+      return;
+  }
 };
 
 /**
@@ -548,7 +563,7 @@ const app = new Hono()
         logOperation(attempt, "refused", `conflict: ${noOp}`);
         return c.json(invalid("conflict", noOp), 409);
       }
-      afterSuccess(state, req, saved);
+      afterSuccess(state, req, saved, checked.app);
       logOperation(attempt, "ok");
       return c.json({ ok: true, output: result.output } as const);
     }
@@ -566,7 +581,7 @@ const app = new Hono()
       try {
         const error = await streamSteps(dokku, steps, (line) => send("output", { line }));
         if (error) end = { kind: "failed", message: error.message };
-        else afterSuccess(state, req, saved);
+        else afterSuccess(state, req, saved, checked.app);
       } catch (e) {
         end = { kind: "failed", message: e instanceof Error ? e.message : String(e) };
       } finally {

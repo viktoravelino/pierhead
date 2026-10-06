@@ -304,7 +304,10 @@ export type DokkuHost = {
   scheduler: string | null;
   /** The global builder default; null means Dokku detects one per app. */
   builder: { selected: string | null; buildDir: string | null };
+  /** What Dokku deploys from when an app sets none (`master` unless the global one is set). */
   deployBranch: string | null;
+  /** The global deploy branch itself; null while unset. */
+  globalDeployBranch: string | null;
   plugins: Plugin[];
   sshKeys: SshKey[];
 };

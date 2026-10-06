@@ -10,7 +10,7 @@ import type { AppSummary } from "../../shared/types";
 
 export { operationAvailability };
 
-/** `{target}` in a wording below stands for what the operation is about: its app, or its network. */
+/** `{target}` in a wording below stands for what the operation is about: see `targetOf`. */
 type OperationUi = {
   /** The confirm button and, with the app name, palette entries and toasts. */
   label: string;
@@ -78,6 +78,24 @@ export const operationUi = {
       "Removes the app's containers, image, config, domains and vhost. This cannot be undone. Storage directories stay on the host.",
     tone: "danger",
   },
+  "apps:rename": {
+    label: "Rename app",
+    title: "Rename an app",
+    pending: "Renaming...",
+    done: "Renamed {target}.",
+    effect:
+      "Gives the app a new name: its default vhost becomes <new name>.<global domain>, its containers are renamed and its git remote becomes dokku@<host>:<new name>, so remotes and bookmarks to the old name stop working, as does anything outside Dokku that points at it (DNS, tunnels, other apps' config). Config, ports, networks, storage mounts, scaling and custom domains come along. Dokku creates the new app, destroys the old one and redeploys the source under the new name (about 30 s), which also starts an app that was stopped; skipping the deploy leaves a deployed app not running until it is started.",
+    tone: "danger",
+  },
+  "apps:clone": {
+    label: "Clone app",
+    title: "Clone an app",
+    pending: "Cloning...",
+    done: "Cloned {target}.",
+    effect:
+      "Copies the app under a new name: config vars (secrets included), port map, network settings and aliases, proxy settings, storage mounts, resource limits, scaling and the git source or image. Storage mounts point at the same host directories, so both apps share that data, and a copied alias answers for both apps on a shared network. Custom domains are not copied: the clone gets only its own default vhost. Deploying the copy takes about 25 s; without it the clone shows as never deployed until it is deployed or synced.",
+    tone: "neutral",
+  },
   "domains:add": {
     label: "Add domain",
     title: "Add domains to {target}",
@@ -102,6 +120,33 @@ export const operationUi = {
     done: "Set the domains of {target}.",
     effect:
       "Replaces every domain with this list, the default vhost included. nginx reloads; the app keeps running.",
+    tone: "neutral",
+  },
+  "domains:add-global": {
+    label: "Add global domain",
+    title: "Add global domains",
+    pending: "Adding...",
+    done: "Added the global domain {target}.",
+    effect:
+      "Apps created from now on get <app>.<domain> as an extra vhost. Apps that already exist are not changed, not even by a rebuild; run dokku domains:reset <app> on the host to regenerate one app's vhosts.",
+    tone: "neutral",
+  },
+  "domains:remove-global": {
+    label: "Remove global domain",
+    title: "Remove a global domain?",
+    pending: "Removing...",
+    done: "Removed the global domain {target}.",
+    effect:
+      "Apps created from now on no longer get it. Apps that already exist keep the vhosts they have, this domain included, until it is removed from each of them. Removing the last global domain leaves new apps without a default vhost.",
+    tone: "danger",
+  },
+  "domains:set-global": {
+    label: "Set global domains",
+    title: "Set the global domains",
+    pending: "Saving...",
+    done: "Set the global domains to {target}.",
+    effect:
+      "Replaces the whole list. Apps created from now on get <app>.<domain> for each; apps that already exist keep their vhosts as they are, and the ones of a domain taken out stay until removed from each app.",
     tone: "neutral",
   },
   "ports:add": {
@@ -237,6 +282,15 @@ export const operationUi = {
       "The branch a push or sync deploys from. Empty goes back to Dokku's default. Takes effect on the next deploy.",
     tone: "neutral",
   },
+  "git:set-global": {
+    label: "Save",
+    title: "Set the global deploy branch",
+    pending: "Saving...",
+    done: "Set the global deploy branch to {target}.",
+    effect:
+      "The branch Dokku deploys from for apps that set none of their own; they follow it from their next push or sync. An app with its own deploy branch keeps it. Empty goes back to Dokku's default, master.",
+    tone: "neutral",
+  },
   "builder:set": {
     label: "Save",
     title: "Change a builder setting of {target}",
@@ -306,6 +360,14 @@ export function conflictProblem(req: OperationRequest, apps: readonly AppSummary
       return apps.some((a) => a.name === req.app)
         ? `An app named ${req.app} already exists.`
         : null;
+    case "apps:rename":
+    case "apps:clone": {
+      if (apps.some((a) => a.name === req.newName)) {
+        return `An app named ${req.newName} already exists.`;
+      }
+      const owner = apps.find((a) => a.domains.includes(req.newName));
+      return owner ? `${req.newName} is already a domain of ${owner.name}.` : null;
+    }
     case "domains:add":
     case "domains:set": {
       for (const domain of req.domains) {

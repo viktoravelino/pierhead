@@ -93,6 +93,13 @@ function fakeHost(
           : fail(`App ${app} does not exist`);
       case "network:list":
         return ok(JSON.stringify(dockerNetworks));
+      case "domains:report:global":
+        return ok(
+          JSON.stringify({
+            "global-enabled": "true",
+            "global-vhosts": "dokku.localhost lab.local",
+          }),
+        );
       case "ps:scale":
       case "storage:list":
       case "docker-options:report":
@@ -394,6 +401,59 @@ describe("what a proxy:disable remembers", () => {
     expect(store.restoreOf("hello")).toEqual(saved);
     afterSuccess(store, disable("hello"), null);
     expect(store.restoreOf("hello")).toBeUndefined();
+  });
+
+  test("a rename hands the entry to the new name, replacing a stale one there, with the old default vhost swapped", () => {
+    store.saveRestore("hello", {
+      ports: saved.ports,
+      domains: ["hello.dokku.localhost", "a.example.com", "hello.example.com"],
+    });
+    store.saveRestore("hello-2", { ports: [], domains: ["stale.example.com"] });
+    afterSuccess(
+      store,
+      {
+        op: "apps:rename",
+        app: "hello",
+        newName: "hello-2",
+        skipDeploy: false,
+        confirm: "hello",
+      },
+      null,
+      { name: "hello", globalDomain: "dokku.localhost" },
+    );
+    expect(store.restoreOf("hello")).toBeUndefined();
+    expect(store.restoreOf("hello-2")).toEqual({
+      ports: saved.ports,
+      domains: ["hello-2.dokku.localhost", "a.example.com", "hello.example.com"],
+    });
+  });
+
+  test("a rename of an app with no entry still drops a stale one under the new name", () => {
+    store.saveRestore("hello-2", saved);
+    afterSuccess(
+      store,
+      {
+        op: "apps:rename",
+        app: "hello",
+        newName: "hello-2",
+        skipDeploy: true,
+        confirm: "hello",
+      },
+      null,
+    );
+    expect(store.restoreOf("hello-2")).toBeUndefined();
+  });
+
+  test("a clone keeps the source's entry and gives the copy none", () => {
+    store.saveRestore("hello", saved);
+    store.saveRestore("hello-copy", saved);
+    afterSuccess(
+      store,
+      { op: "apps:clone", app: "hello", newName: "hello-copy", skipDeploy: true },
+      null,
+    );
+    expect(store.restoreOf("hello")).toEqual(saved);
+    expect(store.restoreOf("hello-copy")).toBeUndefined();
   });
 
   test("enable, create and destroy clear the entry; other operations leave it", () => {
@@ -797,5 +857,134 @@ describe("preflight: apps:unlock", () => {
     expect(await refusal({ op: "apps:unlock", app: "nosuch" }, free)).toMatchObject({
       status: 404,
     });
+  });
+});
+
+describe("preflight: rename and clone", () => {
+  const rename = (newName: string, app = "hello"): OperationRequest => ({
+    op: "apps:rename",
+    app,
+    newName,
+    skipDeploy: false,
+    confirm: app,
+  });
+  const clone = (newName: string, app = "hello"): OperationRequest => ({
+    op: "apps:clone",
+    app,
+    newName,
+    skipDeploy: true,
+  });
+
+  test("a free name goes ahead and returns the source's live detail", async () => {
+    for (const req of [rename("fresh"), clone("fresh")]) {
+      const result = await preflight(host, req);
+      expect(result.ok && result.app?.name).toBe("hello");
+    }
+  });
+
+  test("a name that exists is a 409 for both", async () => {
+    for (const req of [rename("hello-multi"), clone("hello-multi")]) {
+      expect(await refusal(req)).toMatchObject({ status: 409, kind: "exists" });
+    }
+  });
+
+  test("a name another app serves as a domain is a 409 for both", async () => {
+    for (const req of [rename("multi.dokku.localhost"), clone("multi.dokku.localhost")]) {
+      expect(await refusal(req)).toMatchObject({
+        status: 409,
+        kind: "domain-in-use",
+        message: expect.stringContaining("hello-multi"),
+      });
+    }
+  });
+
+  test("an unknown source is a 404, before the target is looked at", async () => {
+    expect(await refusal(rename("fresh", "nope"))).toMatchObject({
+      status: 404,
+      kind: "not-found",
+    });
+    expect(await refusal(clone("hello-multi", "nope"))).toMatchObject({ status: 404 });
+  });
+
+  test("a source holding the deploy lock is refused", async () => {
+    const locked = fakeHost({ hello: running }, { locked: ["hello"] });
+    expect(await refusal(rename("fresh"), locked)).toMatchObject({
+      status: 409,
+      kind: "deploy-in-progress",
+    });
+    expect(await refusal(clone("fresh"), locked)).toMatchObject({ status: 409 });
+  });
+
+  test("a never-deployed or stopped source is fine", async () => {
+    for (const app of ["hello-new", "hello-stopped"]) {
+      expect(await refusal(rename("fresh", app))).toBeNull();
+      expect(await refusal(clone("fresh", app))).toBeNull();
+    }
+  });
+
+  test("a failed existence check is a 502, not a free name", async () => {
+    const broken: DokkuRun = async (name, ...args) =>
+      name === "apps:exists" && args[0] === "fresh"
+        ? { ok: false, error: { kind: "connection", message: "ssh: connection refused" } }
+        : host(name, ...args);
+    expect(await refusal(clone("fresh"), broken)).toMatchObject({
+      status: 502,
+      kind: "connection",
+    });
+  });
+});
+
+describe("preflight: global settings", () => {
+  const globalOp = (
+    op: "domains:add-global" | "domains:remove-global" | "domains:set-global",
+    domains: string[],
+  ): OperationRequest => ({ op, domains });
+
+  test("they read no app, so a held deploy lock does not matter", async () => {
+    const locked = fakeHost({ hello: running }, { locked: ["hello"] });
+    for (const req of [
+      globalOp("domains:add-global", ["new.local"]),
+      globalOp("domains:remove-global", ["lab.local"]),
+      globalOp("domains:set-global", ["only.local"]),
+      { op: "git:set-global", branch: "main" } satisfies OperationRequest,
+    ]) {
+      expect(await preflight(locked, req)).toEqual({ ok: true, app: null });
+    }
+  });
+
+  test("adding only domains that are there is a 409; one new among them is fine", async () => {
+    expect(
+      await refusal(globalOp("domains:add-global", ["lab.local", "dokku.localhost"])),
+    ).toMatchObject({ status: 409, kind: "conflict" });
+    expect(
+      await refusal(globalOp("domains:add-global", ["lab.local", "new.local"])),
+    ).toBeNull();
+  });
+
+  test("removing a domain that is not global is a 409", async () => {
+    expect(
+      await refusal(globalOp("domains:remove-global", ["nope.local"])),
+    ).toMatchObject({
+      status: 409,
+      kind: "conflict",
+      message: expect.stringContaining("nope.local"),
+    });
+  });
+
+  test("setting the list it already is, in any order, is a 409", async () => {
+    expect(
+      await refusal(globalOp("domains:set-global", ["lab.local", "dokku.localhost"])),
+    ).toMatchObject({ status: 409 });
+    expect(await refusal(globalOp("domains:set-global", ["lab.local"]))).toBeNull();
+  });
+
+  test("a failed read of the global domains is a 502", async () => {
+    const broken: DokkuRun = async () => ({
+      ok: false,
+      error: { kind: "timeout", message: "timed out" },
+    });
+    expect(
+      await refusal(globalOp("domains:add-global", ["new.local"]), broken),
+    ).toMatchObject({ status: 502, kind: "timeout" });
   });
 });

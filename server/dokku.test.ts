@@ -57,6 +57,62 @@ describe("buildStep", () => {
   });
 });
 
+describe("buildStep: rename, clone and the global settings", () => {
+  test("rename and clone take an optional --skip-deploy, the old app and a new-app name", () => {
+    expect(buildStep(["apps:rename", "--skip-deploy", "hello", "hello-2"])).toEqual({
+      ok: true,
+      argv: ["apps:rename", "--skip-deploy", "hello", "hello-2"],
+    });
+    expect(buildStep(["apps:clone", "hello", "hello-copy"])).toEqual({
+      ok: true,
+      argv: ["apps:clone", "hello", "hello-copy"],
+    });
+    for (const argv of [
+      ["apps:rename", "hello"],
+      ["apps:rename", "hello", "Bad_Name"],
+      ["apps:rename", "hello", "a".repeat(64)],
+      ["apps:clone", "hello", "-h"],
+      ["apps:clone", "--ignore-existing", "hello", "copy"],
+      ["apps:clone", "hello", "copy", "extra"],
+      ["apps:clone", "--skip-deploy", "hello"],
+      ["apps:rename", "bad app", "x"],
+    ]) {
+      expect(buildStep(argv).ok).toBe(false);
+    }
+  });
+
+  test("global domains are checked and quoted like app domains", () => {
+    expect(buildStep(["domains:add-global", "lab.local", "*.lab.local"])).toEqual({
+      ok: true,
+      argv: ["domains:add-global", "'lab.local'", "'*.lab.local'"],
+    });
+    expect(buildStep(["domains:remove-global", "Old_One.local"]).ok).toBe(true);
+    for (const argv of [
+      ["domains:add-global"],
+      ["domains:set-global", "bad domain"],
+      ["domains:remove-global", "-h"],
+      ["domains:add-global", "$HOME.local"],
+    ]) {
+      expect(buildStep(argv).ok).toBe(false);
+    }
+  });
+
+  test("git:set takes --global in place of the app, and nothing else in that slot", () => {
+    expect(buildStep(["git:set", "--global", "deploy-branch", "main"])).toEqual({
+      ok: true,
+      argv: ["git:set", "--global", "deploy-branch", "main"],
+    });
+    expect(buildStep(["git:set", "--global", "deploy-branch"]).ok).toBe(true);
+    for (const argv of [
+      ["git:set", "--global", "keep-git-dir", "true"],
+      ["git:set", "--global", "deploy-branch", "a b"],
+      ["git:set", "--local", "deploy-branch", "main"],
+    ]) {
+      expect(buildStep(argv).ok).toBe(false);
+    }
+  });
+});
+
 describe("buildStep: settings steps", () => {
   const root = "/var/lib/dokku/data/storage";
 
@@ -170,7 +226,6 @@ describe("buildStep: deploys", () => {
       ["git:set", "hello", "keep-git-dir", "true"],
       ["git:set", "hello", "deploy-branch", "-x"],
       ["git:set", "hello", "deploy-branch", "a", "b"],
-      ["git:set", "--global", "deploy-branch", "main"],
     ]) {
       expect(buildStep(argv).ok).toBe(false);
     }

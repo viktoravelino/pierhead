@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  appOf,
   commandLine,
   commandSteps,
   destructiveConfirm,
+  invalidationOf,
   isOperationId,
   type OperationId,
   type OperationRequest,
@@ -10,6 +12,7 @@ import {
   operations,
   parseOperation,
   streamsOutput,
+  targetOf,
 } from "./operations";
 import type { AppStatus } from "./types";
 
@@ -29,6 +32,30 @@ const valid = {
   "apps:destroy": {
     req: { op: "apps:destroy", app, confirm: app },
     argv: [["apps:destroy", "--force", app]],
+  },
+  "apps:rename": {
+    req: { op: "apps:rename", app, newName: "hello-2", skipDeploy: true, confirm: app },
+    argv: [["apps:rename", "--skip-deploy", app, "hello-2"]],
+  },
+  "apps:clone": {
+    req: { op: "apps:clone", app, newName: "hello-copy", skipDeploy: false },
+    argv: [["apps:clone", app, "hello-copy"]],
+  },
+  "domains:add-global": {
+    req: { op: "domains:add-global", domains: ["lab.local", "*.b.example.com"] },
+    argv: [["domains:add-global", "lab.local", "*.b.example.com"]],
+  },
+  "domains:remove-global": {
+    req: { op: "domains:remove-global", domains: ["lab.local"] },
+    argv: [["domains:remove-global", "lab.local"]],
+  },
+  "domains:set-global": {
+    req: { op: "domains:set-global", domains: ["lab.local"] },
+    argv: [["domains:set-global", "lab.local"]],
+  },
+  "git:set-global": {
+    req: { op: "git:set-global", branch: "main" },
+    argv: [["git:set", "--global", "deploy-branch", "main"]],
   },
   "domains:add": {
     req: { op: "domains:add", app, domains: ["a.example.com", "*.b.example.com"] },
@@ -241,6 +268,7 @@ describe("operations table", () => {
   test("destroying an app or a network and unmounting storage are confirmed by typing the name", () => {
     const destructive = new Set<OperationId>([
       "apps:destroy",
+      "apps:rename",
       "network:destroy",
       "storage:unmount",
     ]);
@@ -276,6 +304,56 @@ describe("operations table", () => {
     expect(streamsOutput(valid["network:set"].req, running)).toBe(true);
     expect(streamsOutput(valid["network:alias-add"].req, running)).toBe(false);
     expect(streamsOutput(valid["storage:mount"].req, running)).toBe(false);
+  });
+
+  test("rename and clone stream when they redeploy a deployed app, and only then", () => {
+    const running = { status: { kind: "running" } } as const;
+    const never = { status: { kind: "not-deployed" } } as const;
+    const rename = valid["apps:rename"].req;
+    const clone = valid["apps:clone"].req;
+    expect(streamsOutput({ ...rename, skipDeploy: false }, running)).toBe(true);
+    expect(streamsOutput(rename, running)).toBe(false);
+    expect(streamsOutput(clone, running)).toBe(true);
+    expect(streamsOutput(clone, never)).toBe(false);
+    expect(streamsOutput({ ...clone, skipDeploy: true }, null)).toBe(false);
+  });
+
+  test("rename and clone name both apps, for the toast and the log; the global settings name what they set", () => {
+    expect(targetOf(valid["apps:rename"].req)).toBe("hello -> hello-2");
+    expect(targetOf(valid["apps:clone"].req)).toBe("hello -> hello-copy");
+    expect(appOf(valid["apps:rename"].req)).toBeNull();
+    expect(appOf(valid["apps:clone"].req)).toBeNull();
+    expect(appOf(valid["ps:start"].req)).toBe(app);
+    expect(targetOf(valid["domains:add-global"].req)).toBe("lab.local *.b.example.com");
+    expect(targetOf(valid["git:set-global"].req)).toBe("main");
+    expect(targetOf({ op: "git:set-global", branch: "" })).toBe("default");
+  });
+
+  test("a rename drops both apps from the cache; the global settings drop the host and every app", () => {
+    expect(invalidationOf(valid["apps:rename"].req)).toEqual({
+      kind: "apps",
+      apps: [app, "hello-2"],
+    });
+    expect(invalidationOf(valid["apps:clone"].req)).toEqual({
+      kind: "apps",
+      apps: [app, "hello-copy"],
+    });
+    expect(invalidationOf(valid["ps:start"].req)).toEqual({ kind: "apps", apps: [app] });
+    expect(invalidationOf(valid["network:create"].req)).toEqual({ kind: "networks" });
+    for (const op of [
+      "domains:add-global",
+      "domains:remove-global",
+      "domains:set-global",
+      "git:set-global",
+    ] as const) {
+      expect(invalidationOf(valid[op].req)).toEqual({ kind: "host" });
+    }
+  });
+
+  test("clearing the global deploy branch passes no value", () => {
+    expect(commandSteps({ op: "git:set-global", branch: "" })).toEqual([
+      ["git:set", "--global", "deploy-branch"],
+    ]);
   });
 
   test("builder:set picks the plugin by property and clears with no value", () => {
@@ -426,6 +504,44 @@ describe("request validation", () => {
       op: "apps:create",
       app: "1abc",
     });
+  });
+
+  test("rename and clone enforce the new-app grammar on the new name and refuse the same name", () => {
+    for (const op of ["apps:rename", "apps:clone"] as const) {
+      const body = { app, skipDeploy: false, confirm: app };
+      for (const newName of ["Bad_Name", "a".repeat(64), "-x", "", "a b", "../x"]) {
+        refused(op, { ...body, newName });
+      }
+      refused(op, { ...body, newName: app });
+      refused(op, { ...body, newName: 7 });
+      refused(op, { ...body, app: "Bad_App", newName: "ok" });
+      expect(typeof parseOperation(op, { ...body, newName: "1.ok-name" })).toBe("object");
+    }
+    refused("apps:rename", { app, newName: "x", skipDeploy: false });
+  });
+
+  test("global domains use the app-domain grammar: hostnames to add, safe strings to remove", () => {
+    for (const domain of ["-h", "bad domain", "http://x.com", "x.com:80"]) {
+      refused("domains:add-global", { domains: [domain] });
+      refused("domains:set-global", { domains: ["ok.com", domain] });
+    }
+    refused("domains:add-global", { domains: [] });
+    refused("domains:set-global", { domains: ["a.com", "a.com"] });
+    refused("domains:add-global", { app, domains: "a.com" });
+    // A domain Dokku already holds may be odd; only shell safety applies to removing it.
+    expect(
+      typeof parseOperation("domains:remove-global", { domains: ["Odd_One.com"] }),
+    ).toBe("object");
+    refused("domains:remove-global", { domains: ["a b"] });
+  });
+
+  test("git:set-global refuses a branch that could be a flag", () => {
+    refused("git:set-global", { branch: "--help" });
+    refused("git:set-global", { branch: "a b" });
+    refused("git:set-global", {});
+    expect(typeof parseOperation("git:set-global", { branch: "release/1.0" })).toBe(
+      "object",
+    );
   });
 
   test("domains: bad hostnames, empty and oversized lists, duplicates", () => {
@@ -743,6 +859,35 @@ describe("availability", () => {
       expect(
         operationAvailability(op, { status: deploying, revision, proxyEnabled: true }).ok,
       ).toBe(false);
+    }
+  });
+
+  test("rename and clone work on a stopped or never-deployed app, but not mid-deploy", () => {
+    for (const op of ["apps:rename", "apps:clone"] as const) {
+      for (const status of [{ kind: "stopped" }, { kind: "not-deployed" }] as const) {
+        expect(
+          operationAvailability(op, { status, revision: null, proxyEnabled: true }).ok,
+        ).toBe(true);
+      }
+      const deploying = { kind: "deploying", step: "build" } as const;
+      expect(
+        operationAvailability(op, { status: deploying, revision, proxyEnabled: true }).ok,
+      ).toBe(false);
+    }
+  });
+
+  test("the global settings need no app state", () => {
+    const state = {
+      status: { kind: "stopped" },
+      revision: null,
+      proxyEnabled: false,
+    } as const;
+    for (const op of [
+      "domains:add-global",
+      "domains:set-global",
+      "git:set-global",
+    ] as const) {
+      expect(operationAvailability(op, state).ok).toBe(true);
     }
   });
 

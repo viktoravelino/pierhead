@@ -473,11 +473,14 @@ export type HostReads = {
   sshKeys: string;
 };
 
+/** The global vhost domains of `domains:report --global`; none while the global domains are disabled. */
+export const parseGlobalDomains = (domains: Report) =>
+  domains["global-enabled"] === "true" ? words(domains["global-vhosts"]) : [];
+
 export function parseDokkuHost(r: HostReads): DokkuHost {
   return {
     version: parseDokkuVersion(r.version),
-    globalDomains:
-      r.domains["global-enabled"] === "true" ? words(r.domains["global-vhosts"]) : [],
+    globalDomains: parseGlobalDomains(r.domains),
     proxyType: parseProxyType(r.proxy),
     scheduler: r.scheduler["computed-selected"] || null,
     // Only the global setting: empty means each app's builder is detected at deploy.
@@ -486,6 +489,7 @@ export function parseDokkuHost(r: HostReads): DokkuHost {
       buildDir: r.builder["global-build-dir"] || null,
     },
     deployBranch: r.git["computed-deploy-branch"] || null,
+    globalDeployBranch: r.git["global-deploy-branch"] || null,
     plugins: parsePlugins(r.plugins),
     sshKeys: parseSshKeys(r.sshKeys),
   };

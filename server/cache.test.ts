@@ -74,6 +74,17 @@ describe("createReadCache", () => {
     expect(await cache.get("app:hello-multi", loader.load)).toBe(2);
   });
 
+  test("clear drops every key", async () => {
+    const cache = createReadCache(5_000);
+    const loader = countingLoader();
+    await cache.get("a", loader.load);
+    await cache.get("b", loader.load);
+
+    cache.clear();
+    expect(await cache.get("a", loader.load)).toBe(3);
+    expect(await cache.get("b", loader.load)).toBe(4);
+  });
+
   test("a load finishing after an invalidate does not come back as a fresh entry", async () => {
     const cache = createReadCache(5_000);
     let finish: (value: string) => void = () => {};

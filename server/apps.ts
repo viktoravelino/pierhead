@@ -7,6 +7,7 @@ import {
   parseBuilds,
   parseDomains,
   parseFormation,
+  parseGlobalDomains,
   parseNetworkList,
   parseReport,
   parseStorage,
@@ -181,6 +182,12 @@ export const domainOwners = (dokku: DokkuRun) =>
       ),
     );
   });
+
+/** The global vhost domains, read live. */
+export const readGlobalDomains = (dokku: DokkuRun) =>
+  outcome(async () =>
+    parseGlobalDomains(parseReport(stdoutOf(await dokku("domains:report:global")))),
+  );
 
 /** Dokku exits 20 with "App <name> does not exist" for an unknown app. */
 export const isNotFound = (error: DokkuError) =>
