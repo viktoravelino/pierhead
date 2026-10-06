@@ -2,6 +2,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { hc, type InferResponseType } from "hono/client";
 import type { AppType } from "../../server/index";
 import type { OperationOutputEvent, OperationRequest } from "../../shared/operations";
+import { reasonLine } from "../../shared/parse";
 import type { LogEndEvent, LogEvent } from "../../shared/types";
 import type { LogHandlers } from "./client";
 
@@ -101,9 +102,28 @@ export async function fetchServiceDsn(type: string, name: string) {
   return body.dsn;
 }
 
-/** Where the browser downloads a service's dump from. */
-export const serviceExportUrl = (type: string, name: string) =>
-  `/api/services/${encoded(type)}/${encoded(name)}/export`;
+/**
+ * Exports a service and saves the dump through the browser. A POST with a custom header
+ * (the server refuses a bare cross-site request) whose body is held in memory as a blob,
+ * so a failure is an error here and never a half-written file.
+ */
+export async function downloadServiceExport(type: string, name: string) {
+  const res = await jsonOrUnreachable(
+    `/api/services/${encoded(type)}/${encoded(name)}/export`,
+    { method: "POST", headers: { "X-Pierhead-Request": "export" } },
+  );
+  if (!res.ok) {
+    const body: ApiFailure = await res.json();
+    throw new ApiError(res.status, body.error.kind, body.error.message);
+  }
+  const file =
+    /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ??
+    `${name}.dump`;
+  const url = URL.createObjectURL(await res.blob());
+  const link = Object.assign(document.createElement("a"), { href: url, download: file });
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 export async function fetchHostDetails() {
   const res = await backend.api.host.$get();
@@ -277,12 +297,9 @@ async function* readEvents(source: ReadableStream<Uint8Array>) {
   }
 }
 
-/** The last non-empty line of Dokku's output, which says how the command ended. */
+/** The last line that says something, which says how the command ended (not a lone ` !` marker). */
 const lastLine = (output: string) =>
-  output
-    .split("\n")
-    .map((line) => line.trim())
-    .findLast(Boolean);
+  output.split("\n").map(reasonLine).findLast(Boolean) ?? undefined;
 
 /**
  * Runs an operation. Quick ones resolve with Dokku's output once it is done; ones that

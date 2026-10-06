@@ -12,7 +12,7 @@ import {
   textButton,
 } from "../../components/OperationButton";
 import { Signal } from "../../components/Signal";
-import { EmptyNote, Mono, Panel } from "../../components/ui";
+import { EmptyNote, ErrorNote, Mono, Panel, Skeleton } from "../../components/ui";
 
 function Command({ children }: { children: string }) {
   return (
@@ -39,7 +39,13 @@ const setMapping = ({ scheme, host, container }: PortMapping): PortMapping => ({
 
 /** The datastore services linked to the app, with unlink, and the picker to link another. */
 function ServicesPanel({ app }: { app: AppView }) {
-  const { data: groups = [] } = useQuery(servicesQuery);
+  const {
+    data: groups = [],
+    isPending,
+    error,
+    isFetching,
+    refetch,
+  } = useQuery(servicesQuery);
   const all = groups.flatMap((g) => g.services);
   const unlinked = all.filter((s) => !s.apps.includes(app.name));
   const noneInstalled = groups.length === 0;
@@ -57,11 +63,15 @@ function ServicesPanel({ app }: { app: AppView }) {
             restart: true,
           }}
           disabledReason={
-            noneInstalled
-              ? "No service plugin is installed on the host."
-              : unlinked.length === 0
-                ? "Every service is already linked."
-                : undefined
+            isPending
+              ? "Loading the services..."
+              : error
+                ? "The services could not be read."
+                : noneInstalled
+                  ? "No service plugin is installed on the host."
+                  : unlinked.length === 0
+                    ? "Every service is already linked."
+                    : undefined
           }
           label="Link a service"
           className={textButton}
@@ -70,7 +80,11 @@ function ServicesPanel({ app }: { app: AppView }) {
         </OperationButton>
       }
     >
-      {app.services.length > 0 ? (
+      {error ? (
+        <ErrorNote error={error} onRetry={() => void refetch()} retrying={isFetching} />
+      ) : isPending ? (
+        <Skeleton className="m-4 h-10" />
+      ) : app.services.length > 0 ? (
         <ul className="divide-y divide-line">
           {app.services.map(({ type, name }) => (
             <li
@@ -104,7 +118,11 @@ function ServicesPanel({ app }: { app: AppView }) {
           ))}
         </ul>
       ) : (
-        <EmptyNote>No service is linked to this app.</EmptyNote>
+        <EmptyNote>
+          {noneInstalled
+            ? "No service plugin is installed on the host."
+            : "No service is linked to this app."}
+        </EmptyNote>
       )}
       {app.partial?.includes("services") && (
         <p className="border-t border-line px-4 py-2.5 text-xs text-warn">
@@ -115,7 +133,9 @@ function ServicesPanel({ app }: { app: AppView }) {
         Linking sets the service's URL as a config var (DATABASE_URL, REDIS_URL...) and
         restarts a running app unless you opt out.
       </p>
-      <Command>{`dokku postgres:app-links ${app.name}`}</Command>
+      {groups.map((g) => (
+        <Command key={g.type}>{`dokku ${g.type}:app-links ${app.name}`}</Command>
+      ))}
     </Panel>
   );
 }

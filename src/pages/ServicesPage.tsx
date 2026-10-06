@@ -9,13 +9,14 @@ import type {
   ServiceGroup,
   ServiceStatus,
 } from "../../shared/types";
-import { describeError, serviceExportUrl } from "../api/backend";
+import { describeError, downloadServiceExport } from "../api/backend";
 import { dataSource, getServiceDsn, subscribeToServiceLogs } from "../api/client";
 import { appsQuery, servicesQuery } from "../api/queries";
 import { CopyButton, iconButton } from "../components/CopyButton";
 import { OperationButton, removeButton, textButton } from "../components/OperationButton";
 import { useWrites } from "../components/OperationHost";
 import { Signal } from "../components/Signal";
+import { useToast } from "../components/Toast";
 import {
   EmptyNote,
   ErrorNote,
@@ -78,7 +79,11 @@ function ServiceButton({
  */
 function ConnectionString({ service }: { service: Service }) {
   const { type, name, maskedDsn } = service;
-  const reveal = useMutation({ mutationFn: () => getServiceDsn(type, name) });
+  const reveal = useMutation({
+    mutationFn: () => getServiceDsn(type, name),
+    // Not kept once hidden: the revealed string must not outlive the view.
+    gcTime: 0,
+  });
   const dsn = reveal.data;
   const revealed = dsn !== undefined;
   return (
@@ -168,39 +173,42 @@ function ServiceLogs({ service }: { service: Service }) {
   );
 }
 
+/** Downloads a dump: a privileged action, so it needs the write switch, and a running service. */
 function ExportButton({ service }: { service: Service }) {
+  const writes = useWrites();
+  const notify = useToast();
+  const download = useMutation({
+    mutationFn: () => downloadServiceExport(service.type, service.name),
+    onSuccess: () => notify({ message: `Exported ${service.name}.` }),
+    onError: (error) =>
+      notify({
+        message: `Export of ${service.name} failed`,
+        detail: describeError(error).message,
+        tone: "error",
+      }),
+  });
   const reason =
     dataSource === "mock"
       ? "The preview has no dump to download."
-      : service.status !== "running"
-        ? "Start the service first."
-        : undefined;
-  const label = `Export ${service.name}`;
-  if (reason) {
-    return (
-      <button
-        type="button"
-        disabled
-        title={reason}
-        aria-label={label}
-        className={`${textButton} flex items-center gap-1.5`}
-      >
-        <Download className="size-3.5" aria-hidden="true" />
-        Export
-      </button>
-    );
-  }
+      : !writes.enabled
+        ? `Exporting needs writes: ${writes.reason}`
+        : service.status !== "running"
+          ? "Start the service first."
+          : download.isPending
+            ? "Exporting..."
+            : undefined;
   return (
-    <a
-      href={serviceExportUrl(service.type, service.name)}
-      download
-      title="Download a dump of the data"
-      aria-label={label}
-      className={`${textButton} flex items-center gap-1.5 leading-8`}
+    <button
+      type="button"
+      disabled={reason !== undefined}
+      title={reason ?? "Download a dump of the data"}
+      aria-label={`Export ${service.name}`}
+      onClick={() => download.mutate()}
+      className={`${textButton} flex items-center gap-1.5`}
     >
       <Download className="size-3.5" aria-hidden="true" />
-      Export
-    </a>
+      {download.isPending ? "Exporting..." : "Export"}
+    </button>
   );
 }
 

@@ -927,6 +927,10 @@ function CreateServiceFields({
   const types = [...new Set([...groups.map((g) => g.type), request.type])].filter(
     Boolean,
   );
+  // The tag an existing service of the type runs, the best example of what the plugin's image takes.
+  const example = groups
+    .find((g) => g.type === request.type)
+    ?.services.find((s) => s.imageVersion !== "")?.imageVersion;
   return (
     <>
       <SelectField
@@ -948,7 +952,7 @@ function CreateServiceFields({
         value={request.version}
         placeholder="the plugin's default"
         focus={false}
-        hint="An image tag such as 16-alpine; the plugin's own image is used. Leave empty for its default."
+        hint={`An image tag of the plugin's image${example ? `, such as ${example}` : ""}. Leave empty for its default.`}
         onChange={(version) => onChange({ ...request, version })}
       />
     </>

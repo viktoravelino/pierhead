@@ -55,7 +55,11 @@ function ConfigRow({
   onUnset: (key: string) => void;
 }) {
   const { key, managed } = entry;
-  const reveal = useMutation({ mutationFn: () => getConfigValue(app, key) });
+  const reveal = useMutation({
+    mutationFn: () => getConfigValue(app, key),
+    // Not kept once hidden: the revealed value must not outlive the view.
+    gcTime: 0,
+  });
   const value = reveal.data;
   const revealed = value !== undefined;
   const writeReason = writes.enabled ? undefined : writes.reason;
