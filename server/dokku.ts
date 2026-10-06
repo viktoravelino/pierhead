@@ -28,6 +28,7 @@ import {
   parsePortMapping,
   storageRoot,
 } from "../shared/grammar";
+import { reasonLine } from "../shared/parse";
 import { createLimiter } from "./limit";
 
 /** Throws on anything that is not a valid app name; sshd joins argv with spaces. */
@@ -794,7 +795,7 @@ export function createDokku(config: DokkuConfig) {
       let lastLine = "";
       async function* lines() {
         for await (const line of readLines(proc.stdout)) {
-          if (line.trim()) lastLine = line.trim();
+          lastLine = reasonLine(line) ?? lastLine;
           yield line;
         }
       }

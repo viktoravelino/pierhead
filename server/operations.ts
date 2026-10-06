@@ -6,7 +6,7 @@ import {
   type ServiceRequest,
   serviceAvailability,
 } from "../shared/operations";
-import { stripAnsi } from "../shared/parse";
+import { reasonLine, stripAnsi } from "../shared/parse";
 import { maskSecrets } from "../shared/services";
 import type { AppDetail, PortMapping, ProxyRestore } from "../shared/types";
 import {
@@ -558,6 +558,20 @@ export async function settleRename(
  */
 const cleanOutput = (...parts: string[]) =>
   maskSecrets(stripAnsi(parts.filter(Boolean).join("\n")));
+
+/**
+ * Why a command failed, for an error body or the log: the last three lines that say
+ * something, without colours, markers or passwords (the first lines are often progress).
+ */
+export const failureText = (message: string) =>
+  maskSecrets(
+    message
+      .split("\n")
+      .map(reasonLine)
+      .filter((line) => line !== null)
+      .slice(-3)
+      .join(" "),
+  );
 
 const maskedError = (error: DokkuError): DokkuError => ({
   ...error,

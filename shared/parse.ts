@@ -504,6 +504,16 @@ const ansi = /\u001b\[[0-9;]*[A-Za-z]/g;
 export const stripAnsi = (raw: string) => raw.replace(ansi, "").replace(/\r$/, "");
 
 /**
+ * The text of a raw output line when it can say why a command failed: ANSI and the leading
+ * ` !` marker stripped, and null for a blank line or one that is only Dokku's ` !` marker (a failed command often
+ * ends with one on its own).
+ */
+export function reasonLine(raw: string) {
+  const text = stripAnsi(raw).trim();
+  return text === "" || /^!+$/.test(text) ? null : text.replace(/^!\s+/, "");
+}
+
+/**
  * One raw `dokku logs` line: `<ESC>[36m2026-10-05T21:13:59.305Z app[web.1]:<ESC>[0m message`
  * (the colour codes wrap the prefix). A line without that prefix, such as a blank or
  * wrapped one, is kept whole with `now` as its time and no process.

@@ -32,6 +32,7 @@ import {
   parseResources,
   parseSshKeys,
   parseStorage,
+  reasonLine,
 } from "./parse";
 
 const fixtureText = (name: string) =>
@@ -628,5 +629,32 @@ describe("git:report settings", () => {
       sourceImage: "nginx:alpine",
     });
     expect(parseGitSettings({ "deploy-branch": "main" }).deployBranch).toBe("main");
+  });
+});
+
+describe("reasonLine", () => {
+  // What `postgres:create` prints over a pty when the image cannot be pulled, byte for byte:
+  // the failure, then a coloured ` !` marker on a line of its own.
+  const marker = "\u001b[1m\u001b[31m !     \u001b[0m\u001b[0m";
+  const output = [
+    "Error response from daemon: manifest for timescale/timescaledb:99.9 not found",
+    `${marker}failed to pull image timescale/timescaledb:99.9: manifest unknown\r`,
+    `${marker}\r`,
+    "",
+  ];
+
+  test("the last line that says something is the reason, not the lone marker", () => {
+    expect(output.map(reasonLine).findLast(Boolean)).toBe(
+      "failed to pull image timescale/timescaledb:99.9: manifest unknown",
+    );
+  });
+
+  test("blank lines and marker-only lines are nothing", () => {
+    for (const raw of ["", "   ", `${marker}\r`, " !     ", "!"]) {
+      expect(reasonLine(raw)).toBeNull();
+    }
+    expect(reasonLine(`${marker}Cannot delete linked service\r`)).toBe(
+      "Cannot delete linked service",
+    );
   });
 });

@@ -12,6 +12,7 @@ import type { DokkuError, DokkuResult, DokkuRun, DokkuSteps } from "./dokku";
 import {
   afterSuccess,
   failureRefusal,
+  failureText,
   preflight,
   restoreToSave,
   runSteps,
@@ -1343,5 +1344,28 @@ describe("service output never carries a password", () => {
     };
     const result = await runSteps(failing, [["postgres:link", "x", "hello"]]);
     expect(JSON.stringify(result)).not.toContain("s3cr3tpw");
+  });
+});
+
+describe("failureText", () => {
+  const marker = "\u001b[1m\u001b[31m !     \u001b[0m\u001b[0m";
+
+  test("keeps the last lines that say something, plain and without a password", () => {
+    const message = [
+      "pg_dump: warning: lots of progress",
+      "pg_dump: more progress",
+      `${marker}connection to postgres://postgres:p@ss/word@dokku-postgres-x:5432/x failed`,
+      `${marker}`,
+      "pg_dump: error: query failed",
+      `${marker}Export aborted`,
+    ].join("\n");
+    expect(failureText(message)).toBe(
+      "connection to postgres://postgres:********@dokku-postgres-x:5432/x failed pg_dump: error: query failed Export aborted",
+    );
+    expect(failureText(message)).not.toContain("word");
+  });
+
+  test("a message with nothing in it is empty", () => {
+    expect(failureText(`${marker}\n\n`)).toBe("");
   });
 });

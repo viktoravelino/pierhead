@@ -62,6 +62,7 @@ import { createHostMetrics, loadGlancesUrl } from "./metrics";
 import {
   afterSuccess,
   failureRefusal,
+  failureText,
   preflight,
   restoreToSave,
   runSteps,
@@ -333,6 +334,9 @@ async function badServiceParams(type: string, name?: string) {
   return null;
 }
 
+/** Services with an export under way, as `type/name`. */
+const exporting = new Set<string>();
+
 const noSuchService = () => invalid("not-found", "No such service");
 
 const app = new Hono()
@@ -446,19 +450,17 @@ const app = new Hono()
     if (!logs.ok) return c.json(logs, 502);
     return logStream(c, logs);
   })
-  // The dump as a download, `<name>-<date>.dump`: `pg_dump`'s custom format for postgres,
-  // an RDB file for redis. Streamed as it is made, ended after `exportTimeoutMs`; a dump that
-  // fails part way errors the response, so a download never ends looking whole. A read, so
-  // not behind the write switch, but recorded in the activity log like a write.
-  .get("/api/services/:type/:name/export", async (c) => {
+  // The dump as a download, `<name>-<date>.dump`: `pg_dump`'s custom format for postgres, an
+  // RDB file for redis. A POST behind the write switch, since it reads all of a database's
+  // data and holds a connection and a dump process for as long as it takes (a link or an
+  // image tag in a page could otherwise start one): export is a privileged action. One at a
+  // time per service (409 `busy`). The response waits for the first byte or the end of the
+  // command, so an early failure is a JSON error and not an empty file; one that fails
+  // part way errors the download, so it never ends looking whole. Ended after
+  // `exportTimeoutMs`. Recorded in the activity log.
+  .post("/api/services/:type/:name/export", async (c) => {
     const startedAt = Date.now();
     const { type, name } = c.req.param();
-    const bad = await badServiceParams(type, name);
-    if (bad) return c.json(bad.body, bad.status);
-    const found = await getService(dokku, type, name);
-    if (!found.ok) {
-      return isNotFound(found.error) ? c.json(noSuchService(), 404) : c.json(found, 502);
-    }
     const attempt: Attempt = {
       op: "service:export",
       app: null,
@@ -466,34 +468,79 @@ const app = new Hono()
       actor: actorOf(c),
       startedAt,
     };
+    if (!writeGate.enabled) {
+      logOperation(attempt, "refused", "writes-disabled");
+      return c.json({ ok: false, error: writeGate.error } as const, 403);
+    }
+    const bad = await badServiceParams(type, name);
+    if (bad) return c.json(bad.body, bad.status);
+    const found = await getService(dokku, type, name);
+    if (!found.ok) {
+      return isNotFound(found.error) ? c.json(noSuchService(), 404) : c.json(found, 502);
+    }
+    if (found.value.status !== "running") {
+      const message = `${name} is not running; start it before exporting.`;
+      logOperation(attempt, "refused", "unavailable", `unavailable: ${message}`);
+      return c.json(invalid("unavailable", message), 409);
+    }
+    const key = `${type}/${name}`;
+    if (exporting.has(key)) {
+      const message = `An export of ${name} is already running.`;
+      logOperation(attempt, "refused", "busy", `busy: ${message}`);
+      return c.json(invalid("busy", message), 409);
+    }
+    exporting.add(key);
+    const finish = (outcome: OperationRecord["outcome"], reason = "") => {
+      exporting.delete(key);
+      logOperation(attempt, outcome, reason ? failureText(reason) : "");
+    };
     const dump = dokku.streamBytes(exportTimeoutMs, "service:export", type, name);
     if (!dump.ok) {
-      logOperation(attempt, "failed", dump.error.kind, dump.error.message);
+      finish("failed", dump.error.message);
       return c.json(dump, 502);
     }
     const { signal } = c.req.raw;
     if (signal.aborted) dump.kill();
     else signal.addEventListener("abort", dump.kill, { once: true });
     const reader = dump.body.getReader();
+    const firstRead = reader.read();
+    // The first byte, or the command ending first: whichever comes, an early failure shows here.
+    const early = await Promise.race([firstRead.then(() => null), dump.exit]);
+    const first = early ? null : await firstRead;
+    const error = early ?? (first?.done ? await dump.exit : null);
+    if (error) {
+      finish("failed", error.message);
+      return c.json(
+        invalid(error.kind, failureText(error.message) || "The export failed."),
+        502,
+      );
+    }
+    if (!first || first.done) {
+      finish("failed", "The export produced no data.");
+      return c.json(invalid("empty", "The export produced no data."), 502);
+    }
     const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(first.value);
+      },
       async pull(controller) {
         const { done, value } = await reader.read();
         if (!done) {
           controller.enqueue(value);
           return;
         }
-        const error = await dump.exit;
-        if (error) {
-          logOperation(attempt, "failed", error.kind, error.message);
-          controller.error(new Error(error.message));
+        const ended = await dump.exit;
+        if (ended) {
+          finish("failed", ended.message);
+          controller.error(new Error(failureText(ended.message)));
         } else {
-          logOperation(attempt, "ok");
+          finish("ok");
           controller.close();
         }
       },
       cancel() {
         dump.kill();
-        logOperation(attempt, "failed", "canceled", "The download was canceled.");
+        finish("failed", "The download was canceled.");
       },
     });
     const date = new Date(startedAt).toISOString().slice(0, 10);

@@ -376,7 +376,7 @@ export type OperationRecord = {
   message: string;
   /** Rename and clone only: the name the app was renamed or cloned to (`app` is null for them). */
   newName?: string;
-  /** Config changes only: whether it restarted (redeployed) the app, which is what leaves a Dokku build record. */
+  /** Config changes and service link or unlink: whether it restarted (redeployed) the app, which is what leaves a Dokku build record. */
   restart?: boolean;
 };
 

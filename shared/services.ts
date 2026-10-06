@@ -9,9 +9,34 @@ import type { Service, ServiceStatus } from "./types";
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** Hides the password of every `scheme://user:password@host` in `text`, wherever it appears. */
-export const maskSecrets = (text: string) =>
-  text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]*:)[^\s@/]+@/gi, "$1********@");
+const urlStart = /\b[a-z][a-z0-9+.-]*:\/\//gi;
+
+/** One line: each URL runs to the next one or the end of the line, and its password to its last `@`. */
+function maskLine(line: string) {
+  const starts = [...line.matchAll(urlStart)];
+  const [first] = starts;
+  if (!first) return line;
+  let masked = line.slice(0, first.index);
+  starts.forEach((start, i) => {
+    const end = starts[i + 1]?.index ?? line.length;
+    const rest = line.slice(start.index + start[0].length, end);
+    // A password may hold `@`, `/`, `:` or spaces, so the userinfo ends at the last `@`
+    // before the next URL. Text after the URL with an `@` in it is masked along (a safe loss).
+    const at = rest.lastIndexOf("@");
+    const colon = rest.slice(0, Math.max(at, 0)).indexOf(":");
+    masked +=
+      at < 0 || colon < 0
+        ? start[0] + rest
+        : `${start[0]}${rest.slice(0, colon)}:********${rest.slice(at)}`;
+  });
+  return masked;
+}
+
+/**
+ * Hides the password of every `scheme://user:password@host` in `text`, wherever it appears
+ * and whatever it holds (`@`, `/`, `:` and spaces included), also in multi-host strings.
+ */
+export const maskSecrets = (text: string) => text.split("\n").map(maskLine).join("\n");
 
 /** A connection string with its password hidden; null when it is empty or not a URL with a password. */
 export function maskDsn(dsn: string) {

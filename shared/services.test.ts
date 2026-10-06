@@ -177,6 +177,40 @@ describe("masking", () => {
     }
   });
 
+  test("a password may hold @, /, : and spaces, and a string may name several hosts", () => {
+    for (const [secret, url] of [
+      ["p@ss:word", "postgres://user:p@ss:word@h:5432/db"],
+      ["pa/ss", "postgres://u:pa/ss@h/db"],
+      ["sec ret", "postgres://u:sec ret@h:5432/db"],
+      ["x@y", "mongodb://u:x@y@h1:27017,h2:27017/db?replicaSet=r"],
+    ] as const) {
+      const masked = maskSecrets(`DATABASE_URL:  ${url}`);
+      expect(masked).not.toContain(secret);
+      expect(masked).toContain(":********@");
+      expect(maskDsn(url)).not.toContain(secret);
+    }
+    expect(maskSecrets("postgres://u:p@ss:word@h:5432/db")).toBe(
+      "postgres://u:********@h:5432/db",
+    );
+    expect(maskSecrets("mongodb://u:pw@h1:27017,h2:27017/db")).toBe(
+      "mongodb://u:********@h1:27017,h2:27017/db",
+    );
+  });
+
+  test("every URL in a line is masked, and text that has no password is left alone", () => {
+    const line =
+      "a postgres://u:one@h/x then redis://:two@c:6379 and https://example.com/a?b=c";
+    expect(maskSecrets(line)).toBe(
+      "a postgres://u:********@h/x then redis://:********@c:6379 and https://example.com/a?b=c",
+    );
+    expect(maskSecrets("l1 postgres://u:one@h\nl2 redis://:two@c")).toBe(
+      "l1 postgres://u:********@h\nl2 redis://:********@c",
+    );
+    expect(maskSecrets("see https://github.com/dokku/dokku-postgres.git")).toBe(
+      "see https://github.com/dokku/dokku-postgres.git",
+    );
+  });
+
   test("maskSecrets cleans a line of Dokku output wherever the URL sits", () => {
     expect(
       maskSecrets(
