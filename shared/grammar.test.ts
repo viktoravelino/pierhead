@@ -2,13 +2,25 @@ import { describe, expect, test } from "bun:test";
 import {
   formatPortMapping,
   isAppName,
+  isContainerPath,
+  isCpu,
   isDomain,
+  isExistingStorageName,
+  isMemory,
+  isNetworkAlias,
+  isNetworkName,
   isNewAppName,
+  isNewProcessType,
+  isProcessCount,
+  isRepoPath,
   isSafeArg,
+  isSafeContainerPath,
   isSafeDomain,
+  isStorageName,
   parsePortMapping,
   portMappingProblem,
   reusedPort,
+  storageNameOf,
 } from "./grammar";
 
 describe("app names", () => {
@@ -163,5 +175,125 @@ describe("safe arguments", () => {
     expect(portMappingProblem({ scheme: "tcp", host: 0, container: 80 }, false)).toMatch(
       /Ports/,
     );
+  });
+});
+
+describe("process types and counts", () => {
+  test("new types are lowercase, never a flag", () => {
+    for (const t of ["web", "worker_2", "a-b"]) expect(isNewProcessType(t)).toBe(true);
+    for (const t of ["We-b", "-w", "w b", "", "a=b", "a".repeat(64)]) {
+      expect(isNewProcessType(t)).toBe(false);
+    }
+  });
+
+  test("counts are whole numbers from 0 to 20", () => {
+    for (const n of [0, 1, 20]) expect(isProcessCount(n)).toBe(true);
+    for (const n of [-1, 21, 1.5, Number.NaN]) expect(isProcessCount(n)).toBe(false);
+  });
+});
+
+describe("networks", () => {
+  test("names and aliases", () => {
+    for (const n of ["a", "my_net.v2", "a-b"]) expect(isNetworkName(n)).toBe(true);
+    for (const n of ["", "A", "-h", "a b", "a/b", "n".repeat(64)]) {
+      expect(isNetworkName(n)).toBe(false);
+    }
+    expect(isNetworkAlias("api-2")).toBe(true);
+    for (const a of ["Api", "a.b", "-a", "a-", "a_b", "x".repeat(64)]) {
+      expect(isNetworkAlias(a)).toBe(false);
+    }
+  });
+});
+
+describe("repository paths", () => {
+  test("relative, no .., no empty or dot segments", () => {
+    for (const p of ["backend", "apps/web", "docker/Dockerfile.prod", "a_b-c/d.e"]) {
+      expect(isRepoPath(p)).toBe(true);
+    }
+    for (const p of [
+      "",
+      "..",
+      "../x",
+      "a/../b",
+      "/etc",
+      "-h",
+      "a//b",
+      "a/",
+      ".",
+      "./a",
+      "a b",
+      "a;b",
+      "a\\b",
+    ]) {
+      expect(isRepoPath(p)).toBe(false);
+    }
+  });
+});
+
+describe("resources", () => {
+  test("memory is digits with an optional b, k, m or g", () => {
+    for (const m of ["256m", "1g", "512", "64k", "100b"]) expect(isMemory(m)).toBe(true);
+    for (const m of ["", "lots", "-1", "1.5g", "256mb", "256 m", "m", "1G"]) {
+      expect(isMemory(m)).toBe(false);
+    }
+  });
+
+  test("cpu is a number with at most two decimals", () => {
+    for (const c of ["0.5", "2", "1.25", "0"]) expect(isCpu(c)).toBe(true);
+    for (const c of ["", "-1", ".5", "1.234", "1e2", "abc", "1,5"]) {
+      expect(isCpu(c)).toBe(false);
+    }
+  });
+});
+
+describe("storage", () => {
+  test("a new directory name is lowercase without dots; an existing one may have them", () => {
+    expect(isStorageName("my_data-2")).toBe(true);
+    for (const n of ["", "A", "a.b", "-x", "../x", "a/b", "a b"]) {
+      expect(isStorageName(n)).toBe(false);
+    }
+    expect(isExistingStorageName("old.dir")).toBe(true);
+    for (const n of ["", ".", "..", "../x", "a/b", "-x"]) {
+      expect(isExistingStorageName(n)).toBe(false);
+    }
+  });
+
+  test("only a directory directly under the storage root has a name", () => {
+    expect(storageNameOf("/var/lib/dokku/data/storage/my-data")).toBe("my-data");
+    for (const path of [
+      "/opt/data",
+      "/var/lib/dokku/data/storage",
+      "/var/lib/dokku/data/storage/",
+      "/var/lib/dokku/data/storage/a/b",
+      "/var/lib/dokku/data/storage/..",
+      "/var/lib/dokku/data/storage/../etc",
+      "/var/lib/dokku/data/storage-other/x",
+    ]) {
+      expect(storageNameOf(path)).toBeNull();
+    }
+  });
+
+  test("container paths are absolute and clean; stored ones may use more characters but not : or ..", () => {
+    for (const p of ["/data", "/var/lib/app.d/x_y-z"])
+      expect(isContainerPath(p)).toBe(true);
+    for (const p of [
+      "",
+      "/",
+      "data",
+      "/a/../b",
+      "/a//b",
+      "/a/",
+      "/a b",
+      "/a:ro",
+      "/a;b",
+      "/a*",
+    ]) {
+      expect(isContainerPath(p)).toBe(false);
+    }
+    expect(isSafeContainerPath("/data")).toBe(true);
+    expect(isSafeContainerPath("/a@b")).toBe(true);
+    for (const p of ["data", "/a/../b", "/a:ro", "/a b", "/a;b", "/a'b"]) {
+      expect(isSafeContainerPath(p)).toBe(false);
+    }
   });
 });

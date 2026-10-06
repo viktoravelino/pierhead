@@ -1,8 +1,8 @@
-import { formatPortMapping } from "../shared/grammar";
+import { formatPortMapping, storageHostPath } from "../shared/grammar";
 import { type OperationRequest, operationAvailability } from "../shared/operations";
 import { stripAnsi } from "../shared/parse";
 import type { AppDetail, PortMapping, ProxyRestore } from "../shared/types";
-import { domainOwners, getApp, isNotFound } from "./apps";
+import { domainOwners, getApp, isNotFound, listNetworks } from "./apps";
 import type { DokkuError, DokkuRun, DokkuSteps } from "./dokku";
 
 // What `POST /api/operations/:op` does around the shared table: checks against the live
@@ -53,6 +53,10 @@ export async function preflight(
       : refused(409, "domain-in-use", `${req.app} is already a domain of ${owner}.`);
   }
 
+  if (req.op === "network:create" || req.op === "network:destroy") {
+    return networkPreflight(dokku, req);
+  }
+
   // Dokku's deploy lock is the only sign of a deploy in progress (no report shows one);
   // it also catches the rebuild or proxy toggle this server is streaming.
   const lock = await dokku("apps:locked", req.app);
@@ -73,6 +77,12 @@ export async function preflight(
 
   const availability = operationAvailability(req.op, app);
   if (!availability.ok) return refused(409, "unavailable", availability.reason);
+  // Settings that only apply on the next deploy offer to rebuild; refuse a rebuild that cannot run.
+  if ("rebuild" in req && req.rebuild) {
+    const rebuild = operationAvailability("ps:rebuild", app);
+    if (!rebuild.ok)
+      return refused(409, "unavailable", `Cannot rebuild: ${rebuild.reason}`);
+  }
 
   switch (req.op) {
     case "domains:add":
@@ -110,10 +120,47 @@ export async function preflight(
             `${req.app} has no set mapping ${formatPortMapping(missing)}.`,
           );
     }
+    case "network:set":
+      return checkNetworkSet(dokku, req, app);
+    case "network:alias-add":
+      return app.aliases.includes(req.alias)
+        ? refused(409, "conflict", `${req.app} already has the alias ${req.alias}.`)
+        : { ok: true, app };
+    case "network:alias-remove":
+      return app.aliases.includes(req.alias)
+        ? { ok: true, app }
+        : refused(409, "conflict", `${req.app} has no alias ${req.alias}.`);
+    case "storage:mount": {
+      const taken = app.storage.find((m) => m.containerPath === req.containerPath);
+      return taken === undefined
+        ? { ok: true, app }
+        : refused(
+            409,
+            "conflict",
+            `${req.containerPath} is already a mount of ${req.app} (${taken.hostPath}).`,
+          );
+    }
+    case "storage:unmount": {
+      // Only what pierhead mounts: a directory under the storage root, at this exact path.
+      const hostPath = storageHostPath(req.name);
+      return app.storage.some(
+        (m) => m.hostPath === hostPath && m.containerPath === req.containerPath,
+      )
+        ? { ok: true, app }
+        : refused(
+            409,
+            "conflict",
+            `${req.app} does not mount ${hostPath} at ${req.containerPath}.`,
+          );
+    }
     case "ps:start":
     case "ps:stop":
     case "ps:restart":
     case "ps:rebuild":
+    case "ps:scale":
+    case "builder:set":
+    case "resource:set":
+    case "resource:clear":
     case "apps:destroy":
     case "ports:add":
     case "ports:set":
@@ -121,6 +168,74 @@ export async function preflight(
     case "proxy:disable":
       return { ok: true, app };
   }
+}
+
+/**
+ * `network:create` and `network:destroy`, from the host's networks and the apps' reports
+ * (Dokku destroys a network an app still names, and Docker only objects once a container is on it).
+ */
+async function networkPreflight(
+  dokku: DokkuRun,
+  req: Extract<OperationRequest, { op: "network:create" | "network:destroy" }>,
+): Promise<Preflight> {
+  const networks = await listNetworks(dokku);
+  if (!networks.ok) return { ok: false, refusal: failure(networks.error) };
+  const found = networks.value.find((n) => n.name === req.network);
+  if (req.op === "network:create") {
+    return found
+      ? refused(409, "exists", `A network named ${req.network} already exists.`)
+      : { ok: true, app: null };
+  }
+  if (!found) {
+    return {
+      ok: false,
+      refusal: { status: 404, kind: "not-found", message: "No such network" },
+    };
+  }
+  if (!found.dokkuManaged) {
+    return refused(
+      409,
+      "unmanaged",
+      `${req.network} was not created through Dokku, so pierhead leaves it alone.`,
+    );
+  }
+  if (found.members.length > 0) {
+    const apps = found.members.map((m) => m.app).join(", ");
+    return refused(409, "in-use", `${req.network} is still used by ${apps}.`);
+  }
+  return { ok: true, app: null };
+}
+
+/** Every network must exist, and Dokku refuses one app attaching a network after both creating and deploying. */
+async function checkNetworkSet(
+  dokku: DokkuRun,
+  req: Extract<OperationRequest, { op: "network:set" }>,
+  app: AppDetail,
+): Promise<Preflight> {
+  if (req.networks.length > 0) {
+    const networks = await listNetworks(dokku);
+    if (!networks.ok) return { ok: false, refusal: failure(networks.error) };
+    const missing = req.networks.find((n) => !networks.value.some((v) => v.name === n));
+    if (missing !== undefined) {
+      return refused(409, "unknown-network", `There is no network named ${missing}.`);
+    }
+  }
+  const counterpart =
+    req.property === "attach-post-create"
+      ? "attach-post-deploy"
+      : req.property === "attach-post-deploy"
+        ? "attach-post-create"
+        : null;
+  const twice =
+    counterpart && req.networks.find((n) => app.attachments[counterpart].includes(n));
+  if (counterpart && twice) {
+    return refused(
+      409,
+      "conflict",
+      `${twice} is already attached through ${counterpart}; Dokku attaches a network once.`,
+    );
+  }
+  return { ok: true, app };
 }
 
 const samePort = (a: PortMapping, b: PortMapping) =>

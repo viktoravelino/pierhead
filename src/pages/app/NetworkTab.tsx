@@ -1,15 +1,13 @@
 import { ArrowRight, X } from "lucide-react";
-import type { ReactNode } from "react";
-import type { OperationId, OperationRequest } from "../../../shared/operations";
+import type { OperationRequest } from "../../../shared/operations";
 import type { PortMapping } from "../../../shared/types";
 import type { AppView } from "../../api/client";
-import { operationAvailability } from "../../api/operations";
 import { DomainLink } from "../../components/DomainLink";
 import {
-  usePendingOperation,
-  useRequestOperation,
-  useWrites,
-} from "../../components/OperationHost";
+  OperationButton,
+  removeButton,
+  textButton,
+} from "../../components/OperationButton";
 import { Signal } from "../../components/Signal";
 import { EmptyNote, Mono, Panel } from "../../components/ui";
 
@@ -19,56 +17,6 @@ function Command({ children }: { children: string }) {
       <span className="select-none">$ </span>
       {children}
     </p>
-  );
-}
-
-const textButton =
-  "h-8 rounded-sm border border-line-strong px-2.5 text-sm font-medium enabled:hover:bg-raised disabled:cursor-not-allowed disabled:opacity-45";
-
-const removeButton =
-  "grid size-8 shrink-0 place-items-center rounded-sm text-dim enabled:hover:bg-crit/10 enabled:hover:text-crit disabled:cursor-not-allowed disabled:opacity-45";
-
-/** What a control for `op` on this app says when it cannot be used, if anything. */
-function useDisabledReason(op: OperationId, app: AppView) {
-  const writes = useWrites();
-  const pending = usePendingOperation();
-  const availability = operationAvailability(op, app);
-  if (!writes.enabled) return writes.reason;
-  if (!availability.ok) return availability.reason;
-  if (pending) return "Another operation is running.";
-  return undefined;
-}
-
-/** Opens the dialog for `request`; disabled, with the reason as its tooltip, when it cannot run. */
-function OperationButton({
-  app,
-  request,
-  note,
-  className,
-  label,
-  children,
-}: {
-  app: AppView;
-  request: OperationRequest;
-  /** Shown in the dialog under the effect. */
-  note?: string;
-  className: string;
-  label: string;
-  children: ReactNode;
-}) {
-  const open = useRequestOperation();
-  const disabledReason = useDisabledReason(request.op, app);
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      disabled={disabledReason !== undefined}
-      title={disabledReason ?? label}
-      onClick={() => open(request, note)}
-      className={className}
-    >
-      {children}
-    </button>
   );
 }
 

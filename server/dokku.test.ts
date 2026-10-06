@@ -56,3 +56,82 @@ describe("buildStep", () => {
     }
   });
 });
+
+describe("buildStep: settings steps", () => {
+  const root = "/var/lib/dokku/data/storage";
+
+  test("passes the steps the table builds, quoting the alias option for the SSH hop", () => {
+    const argvs = [
+      ["ps:scale", "--skip-deploy", "hello", "web=1", "worker=0"],
+      ["network:create", "my-net"],
+      ["network:destroy", "--force", "my-net"],
+      ["network:set", "hello", "attach-post-create", "a-net", "b-net"],
+      ["network:set", "hello", "initial-network"],
+      ["builder:set", "hello", "build-dir", "apps/web"],
+      ["builder:set", "hello", "selected"],
+      ["builder-dockerfile:set", "hello", "dockerfile-path", "docker/Dockerfile.prod"],
+      [
+        "resource:limit",
+        "--process-type",
+        "web",
+        "--memory",
+        "256m",
+        "--cpu",
+        "0.5",
+        "hello",
+      ],
+      ["resource:reserve-clear", "hello"],
+      ["storage:create", "my-data"],
+      ["storage:mount", "hello", `${root}/my-data:/data`],
+      ["storage:unmount", "hello", `${root}/old.dir:/data`],
+    ];
+    for (const argv of argvs) expect(buildStep(argv)).toEqual({ ok: true, argv });
+    expect(
+      buildStep(["docker-options:add", "hello", "deploy", "--network-alias api"]),
+    ).toEqual({
+      ok: true,
+      argv: ["docker-options:add", "hello", "deploy", "'--network-alias api'"],
+    });
+  });
+
+  test("refuses what the grammars refuse and options that are not aliases", () => {
+    for (const argv of [
+      ["ps:scale", "hello", "We-b=1"],
+      ["ps:scale", "hello", "web=99"],
+      ["ps:scale", "hello", "web=-1"],
+      ["ps:scale", "hello"],
+      ["ps:scale", "--skip-deploy", "web=1"],
+      ["network:create", "Bad Net"],
+      ["network:create", "-h"],
+      ["network:destroy", "my-net"],
+      ["network:set", "hello", "tld", "a-net"],
+      ["network:set", "hello", "initial-network", "a;b"],
+      ["docker-options:add", "hello", "build", "--network-alias api"],
+      ["docker-options:add", "hello", "deploy", "--privileged"],
+      ["docker-options:add", "hello", "deploy", "--network-alias a;b"],
+      ["docker-options:add", "hello", "deploy", "--network-alias Upper"],
+      ["builder:set", "hello", "build-dir", "../x"],
+      ["builder:set", "hello", "build-dir", "/etc"],
+      ["builder:set", "hello", "selected", "nope"],
+      ["builder:set", "hello", "skip-cleanup", "true"],
+      ["builder-dockerfile:set", "hello", "build-dir", "x"],
+      ["resource:limit", "--memory", "lots", "hello"],
+      ["resource:limit", "--cpu", "-1", "hello"],
+      ["resource:limit", "--unknown", "1", "hello"],
+      ["resource:limit", "hello", "--memory", "1g"],
+      ["resource:limit-clear", "--memory", "1g", "hello"],
+      ["storage:create", "../x"],
+      ["storage:create", "UPPER"],
+      ["storage:mount", "hello", "/etc:/data"],
+      ["storage:mount", "hello", `${root}/../etc:/data`],
+      ["storage:mount", "hello", `${root}/x/y:/data`],
+      ["storage:mount", "hello", `${root}/x:data`],
+      ["storage:mount", "hello", `${root}/x:/a/../b`],
+      ["storage:mount", "hello", `${root}/x:/a b`],
+      ["storage:unmount", "hello", `/opt/host:/data`],
+      ["storage:unmount", "hello", `${root}/x:/data:ro`],
+    ]) {
+      expect(buildStep(argv).ok).toBe(false);
+    }
+  });
+});

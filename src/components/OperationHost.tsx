@@ -10,18 +10,39 @@ import {
   useRef,
   useState,
 } from "react";
-import { formatPortMapping, isDomain, portSchemes } from "../../shared/grammar";
+import {
+  builderNames,
+  formatPortMapping,
+  isDomain,
+  portSchemes,
+} from "../../shared/grammar";
 import {
   commandLine,
   destructiveConfirm,
   type OperationRequest,
   parseOperation,
+  targetOf,
 } from "../../shared/operations";
 import type { PortMapping } from "../../shared/types";
 import { backendHealthQuery, describeError } from "../api/backend";
 import { dataSource, runOperation } from "../api/client";
-import { conflictProblem, forApp, operationUi, psOperationIds } from "../api/operations";
+import {
+  conflictProblem,
+  forTarget,
+  operationUi,
+  psOperationIds,
+} from "../api/operations";
 import { appsQuery, networksQuery } from "../api/queries";
+import {
+  Checkbox,
+  FormationList,
+  inputClass,
+  NetworkPicker,
+  RebuildToggle,
+  rowButton,
+  SelectField,
+  TextField,
+} from "./FormControls";
 import { useToast } from "./Toast";
 
 /** Whether the server accepts operations; `reason` is what a disabled control says. */
@@ -52,22 +73,19 @@ export const usePendingOperation = () => useOperationContext().pending;
 /** Whether operations can run: the mock never refuses, the real server says in its health. */
 export const useWrites = () => useOperationContext().writes;
 
-const inputClass =
-  "h-9 w-full rounded-sm border border-line-strong bg-sunken px-2.5 font-mono text-[13px] focus:outline-2 focus:outline-accent";
-
 const secondaryButton =
   "h-9 rounded-sm border border-line-strong px-3.5 font-medium hover:bg-sunken";
 
-/** A wording with its `{app}` set in monospace. */
-function WithApp({ text, app }: { text: string; app: string }) {
-  const [before = "", ...after] = text.split("{app}");
+/** A wording with its `{target}` set in monospace. */
+function WithTarget({ text, target }: { text: string; target: string }) {
+  const [before = "", ...after] = text.split("{target}");
   return (
     <>
       {before}
       {after.length > 0 && (
         <>
-          <span className="font-mono">{app}</span>
-          {after.join("{app}")}
+          <span className="font-mono">{target}</span>
+          {after.join("{target}")}
         </>
       )}
     </>
@@ -136,7 +154,7 @@ export function OperationHost({ children }: { children: ReactNode }) {
       notify(
         dataSource === "mock"
           ? { message: "mock: would run", detail }
-          : { message: forApp(operationUi[req.op].done, req.app), detail },
+          : { message: forTarget(operationUi[req.op].done, targetOf(req)), detail },
       );
       if (dataSource === "mock") return;
       if (req.op === "apps:create") {
@@ -151,7 +169,7 @@ export function OperationHost({ children }: { children: ReactNode }) {
       if (psOperationIds.some((id) => id === req.op)) {
         setOpened(null);
         notify({
-          message: `${operationUi[req.op].label} ${req.app} failed: ${message}`,
+          message: `${operationUi[req.op].label} ${targetOf(req)} failed: ${message}`,
           tone: "error",
         });
       } else {
@@ -218,7 +236,7 @@ export function OperationHost({ children }: { children: ReactNode }) {
           <div className="flex flex-col gap-4 p-5">
             <div className="flex items-center justify-between gap-3">
               <h2 id="operation-title" className="text-lg font-semibold">
-                {panelUi.label} <span className="font-mono">{panel.app}</span>
+                {panelUi.label} <span className="font-mono">{targetOf(panel)}</span>
               </h2>
               <span
                 role="status"
@@ -323,7 +341,7 @@ function OperationForm({
     >
       <div className="flex flex-col gap-1.5">
         <h2 id="operation-title" className="text-lg font-semibold">
-          <WithApp text={ui.title} app={current.app} />
+          <WithTarget text={ui.title} target={targetOf(current)} />
         </h2>
         <p className="text-pretty text-dim">{ui.effect}</p>
       </div>
@@ -477,6 +495,168 @@ function Fields({
         </label>
       );
     }
+    case "ps:scale": {
+      const locked = initial.op === "ps:scale" ? initial.formation.length : 0;
+      return (
+        <>
+          <FormationList
+            formation={request.formation}
+            locked={locked}
+            onChange={(formation) => onChange({ ...request, formation })}
+          />
+          <Checkbox
+            checked={request.skipDeploy}
+            onChange={(skipDeploy) => onChange({ ...request, skipDeploy })}
+          >
+            Skip the deploy. Only the formation is saved; containers keep running as they
+            are until the next deploy, restart or rebuild, and scaling to the same numbers
+            later does nothing.
+          </Checkbox>
+        </>
+      );
+    }
+    case "network:create":
+      return (
+        <TextField
+          label="Network name"
+          value={request.network}
+          placeholder="my-net"
+          hint="Lowercase letters, digits, dots, underscores and hyphens."
+          onChange={(network) => onChange({ ...request, network })}
+        />
+      );
+    case "network:destroy":
+      return (
+        <TextField
+          label={`Type ${request.network} to confirm`}
+          value={request.confirm}
+          placeholder={request.network}
+          onChange={(confirm) => onChange({ ...request, confirm })}
+        />
+      );
+    case "network:set":
+      return (
+        <>
+          <NetworkPicker
+            property={request.property}
+            selected={request.networks}
+            onChange={(networks) => onChange({ ...request, networks })}
+          />
+          <RebuildToggle
+            app={request.app}
+            checked={request.rebuild}
+            onChange={(rebuild) => onChange({ ...request, rebuild })}
+          />
+        </>
+      );
+    case "network:alias-add":
+      return (
+        <>
+          <TextField
+            label="Alias"
+            value={request.alias}
+            placeholder="api"
+            hint="One lowercase DNS label. It applies to every network the app joins."
+            onChange={(alias) => onChange({ ...request, alias })}
+          />
+          <RebuildToggle
+            app={request.app}
+            checked={request.rebuild}
+            onChange={(rebuild) => onChange({ ...request, rebuild })}
+          />
+        </>
+      );
+    case "network:alias-remove":
+      return (
+        <RebuildToggle
+          app={request.app}
+          checked={request.rebuild}
+          onChange={(rebuild) => onChange({ ...request, rebuild })}
+        />
+      );
+    case "builder:set":
+      return request.property === "selected" ? (
+        <SelectField
+          label="Builder"
+          value={request.value}
+          hint="Empty lets Dokku detect the builder from the repository."
+          options={[
+            { value: "", label: "Detect automatically" },
+            ...builderNames.map((name) => ({ value: name, label: name })),
+          ]}
+          onChange={(value) => onChange({ ...request, value })}
+        />
+      ) : (
+        <TextField
+          label={request.property === "build-dir" ? "Build directory" : "Dockerfile path"}
+          value={request.value}
+          placeholder={request.property === "build-dir" ? "backend" : "docker/Dockerfile"}
+          hint="Relative to the repository root. Empty clears it."
+          onChange={(value) => onChange({ ...request, value })}
+        />
+      );
+    case "resource:set":
+      return (
+        <>
+          <p className="text-sm text-dim">
+            {request.kind === "limit" ? "Limit" : "Reservation"} for{" "}
+            <span className="font-mono">
+              {request.processType ?? "all process types"}
+            </span>
+          </p>
+          <TextField
+            label="Memory"
+            value={request.memory}
+            placeholder="256m"
+            hint="A number with an optional unit b, k, m or g; a bare number is megabytes."
+            onChange={(memory) => onChange({ ...request, memory })}
+          />
+          <TextField
+            label="CPUs"
+            value={request.cpu}
+            placeholder="0.5"
+            focus={false}
+            hint="Up to two decimals."
+            onChange={(cpu) => onChange({ ...request, cpu })}
+          />
+        </>
+      );
+    case "resource:clear":
+      return (
+        <p className="text-sm text-dim">
+          {request.kind === "limit" ? "Limit" : "Reservation"} for{" "}
+          <span className="font-mono">{request.processType ?? "all process types"}</span>
+        </p>
+      );
+    case "storage:mount":
+      return (
+        <>
+          <TextField
+            label="Directory name"
+            value={request.name}
+            placeholder="my-data"
+            hint="Lives at /var/lib/dokku/data/storage/<name> on the host; created if missing."
+            onChange={(name) => onChange({ ...request, name })}
+          />
+          <TextField
+            label="Path in the container"
+            value={request.containerPath}
+            placeholder="/data"
+            focus={false}
+            hint="Absolute, such as /data."
+            onChange={(containerPath) => onChange({ ...request, containerPath })}
+          />
+        </>
+      );
+    case "storage:unmount":
+      return (
+        <TextField
+          label={`Type ${request.containerPath} to confirm`}
+          value={request.confirm}
+          placeholder={request.containerPath}
+          onChange={(confirm) => onChange({ ...request, confirm })}
+        />
+      );
     case "ps:start":
     case "ps:stop":
     case "ps:restart":
@@ -487,41 +667,6 @@ function Fields({
       return null;
   }
 }
-
-function TextField({
-  label,
-  value,
-  placeholder,
-  hint,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  placeholder: string;
-  hint?: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="flex flex-col gap-1.5">
-      <span className="label">{label}</span>
-      <input
-        // biome-ignore lint/a11y/noAutofocus: the dialog exists to fill this field
-        autoFocus
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        autoComplete="off"
-        autoCapitalize="off"
-        spellCheck={false}
-        className={inputClass}
-      />
-      {hint && <span className="text-xs text-faint">{hint}</span>}
-    </label>
-  );
-}
-
-const rowButton =
-  "grid size-9 shrink-0 place-items-center rounded-sm border border-line-strong text-dim hover:bg-sunken hover:text-fg disabled:opacity-45";
 
 /** Rows of one text input each, with remove buttons and an "Add another". */
 function StringList({

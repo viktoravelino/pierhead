@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ChevronRight, Hammer, LoaderCircle, Play, RotateCw, Square } from "lucide-react";
+import { appOf } from "../../shared/operations";
 import { ApiError } from "../api/backend";
 import { operationAvailability, operationUi, psOperationIds } from "../api/operations";
 import { appQuery } from "../api/queries";
@@ -113,7 +114,7 @@ export function AppPage({ appName, tab }: { appName: string; tab: AppTab }) {
           <div className="flex flex-wrap gap-2">
             {psOperationIds.map((id) => {
               const availability = operationAvailability(id, app);
-              const running = pending?.app === app.name && pending.op === id;
+              const running = pending && appOf(pending) === app.name && pending.op === id;
               const disabledReason = !writes.enabled
                 ? writes.reason
                 : !availability.ok

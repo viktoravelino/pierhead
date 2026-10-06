@@ -111,7 +111,7 @@ export const listApps = (dokku: Dokku) =>
  * all-apps `network:report`, three SSH calls in parallel however many apps there are.
  * Zipped by position like `listApps`, with the same retry on a length mismatch.
  */
-export const listNetworks = (dokku: Dokku) =>
+export const listNetworks = (dokku: DokkuRun) =>
   outcome<Network[]>(async () => {
     const [networks, names, reports] = await Promise.all([
       dokku("network:list"),
@@ -156,12 +156,25 @@ export const isNotFound = (error: DokkuError) =>
   error.kind === "command" && error.message.includes("does not exist");
 
 /**
- * One app's full detail: seven reports in parallel over the shared connection, then
+ * One app's full detail: twelve reads in parallel over the shared connection, then
  * `GIT_REV` when the git report has no sha.
  */
 export async function getApp(dokku: DokkuRun, name: string): Promise<Outcome<AppDetail>> {
   const result = await outcome<AppDetail>(async () => {
-    const [ps, domains, ports, network, proxy, builder, git] = await Promise.all([
+    const [
+      ps,
+      domains,
+      ports,
+      network,
+      proxy,
+      builder,
+      git,
+      resource,
+      builderDockerfile,
+      scale,
+      storage,
+      dockerOptions,
+    ] = await Promise.all([
       dokku("ps:report", name),
       dokku("domains:report", name),
       dokku("ports:report", name),
@@ -169,6 +182,11 @@ export async function getApp(dokku: DokkuRun, name: string): Promise<Outcome<App
       dokku("proxy:report", name),
       dokku("builder:report", name),
       dokku("git:report", name),
+      dokku("resource:report", name),
+      dokku("builder-dockerfile:report", name),
+      dokku("ps:scale", name),
+      dokku("storage:list", name),
+      dokku("docker-options:report", name),
     ]);
     const gitReport = parseReport(stdoutOf(git));
     return parseAppDetail(name, {
@@ -179,6 +197,11 @@ export async function getApp(dokku: DokkuRun, name: string): Promise<Outcome<App
       proxy: parseReport(stdoutOf(proxy)),
       builder: parseReport(stdoutOf(builder)),
       git: gitReport,
+      resource: parseReport(stdoutOf(resource)),
+      builderDockerfile: parseReport(stdoutOf(builderDockerfile)),
+      scale: stdoutOf(scale),
+      storage: stdoutOf(storage),
+      dockerOptions: stdoutOf(dockerOptions),
       gitRev: await gitRevOf(dokku, name, gitReport),
     });
   });

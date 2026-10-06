@@ -104,6 +104,21 @@ function toApp(raw: RawApp): AppView {
     ...parseDomains(raw.domains),
     ports: portsOf(raw.ports, false),
     networks: raw.networks,
+    // The mock has no settings to edit; these are what an app with none looks like.
+    attachments: {
+      "initial-network": [],
+      "attach-post-create": [],
+      "attach-post-deploy": raw.networks.map((n) => n.name),
+    },
+    aliases: raw.networks.flatMap((n) => (n.alias ? [n.alias] : [])),
+    formation: [...new Set(processes.map((p) => p.type))].map((type) => ({
+      type,
+      count: processes.filter((p) => p.type === type).length,
+    })),
+    canScale: true,
+    builder: { selected: null, buildDir: null, dockerfilePath: null },
+    resources: [],
+    storage: [],
     sample: { summary: raw.summary, lastDeploy },
   };
 }

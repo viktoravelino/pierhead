@@ -60,6 +60,36 @@ export type AppNetwork = {
   alias: string | null;
 };
 
+/** One process type of the app's formation: how many containers `ps:scale` asks for. */
+export type FormationEntry = { type: string; count: number };
+
+/** What the app itself sets for the builder; null where it sets nothing (Dokku detects or defaults). */
+export type BuilderSettings = {
+  selected: string | null;
+  buildDir: string | null;
+  dockerfilePath: string | null;
+};
+
+export type ResourceKind = "limit" | "reserve";
+
+/** Docker's `--memory` and `--cpu` values, as Dokku stores them; null where unset. */
+export type ResourceValues = { memory: string | null; cpu: string | null };
+
+/** Limits and reservations of one process type; `processType` null is the default for every type. */
+export type ResourceEntry = {
+  processType: string | null;
+  limit: ResourceValues;
+  reserve: ResourceValues;
+};
+
+/** A bind mount from `storage:list`. */
+export type StorageMount = {
+  hostPath: string;
+  containerPath: string;
+  /** The directory's name when it is one under Dokku's storage root, the only kind pierhead edits. */
+  name: string | null;
+};
+
 /** The git revision Dokku last received for the app. */
 export type Revision = {
   sha: string;
@@ -93,6 +123,17 @@ export type AppDetail = AppCommon & {
   globalDomain: string;
   ports: AppPort[];
   networks: AppNetwork[];
+  /** The networks the app itself sets for each attachment (global defaults not included). */
+  attachments: Record<NetworkAttachment, string[]>;
+  /** `--network-alias` options on the app's deploy phase; they apply to every network it joins. */
+  aliases: string[];
+  /** Process types and their requested counts, as `ps:scale` prints them. */
+  formation: FormationEntry[];
+  /** False when `ps:report` says Dokku will not scale the app. */
+  canScale: boolean;
+  builder: BuilderSettings;
+  resources: ResourceEntry[];
+  storage: StorageMount[];
   /**
    * The port map and domains the app had when pierhead disabled its proxy (Dokku clears
    * both, and `proxy:enable` brings back only the default domain). Only the API server

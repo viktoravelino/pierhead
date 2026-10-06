@@ -8,15 +8,18 @@ import {
   parseConfigSetBody,
   parseConfigValue,
 } from "../shared/config";
-import { isAppName } from "../shared/grammar";
+import { isAppName, isProcessType } from "../shared/grammar";
 import {
+  appOf,
   commandSteps,
   conflictsOnNoOp,
   destructiveConfirm,
   isOperationId,
   type OperationOutputEvent,
+  type OperationRequest,
   parseOperation,
   streamsOutput,
+  targetOf,
 } from "../shared/operations";
 import { parseDokkuVersion, parseLogEvent } from "../shared/parse";
 import type { LogEndEvent, PierheadConfig } from "../shared/types";
@@ -26,15 +29,10 @@ import {
   createReadCache,
   hostCacheTtlMs,
   invalidateApp,
+  invalidateNetworks,
   loadCacheTtl,
 } from "./cache";
-import {
-  createDokku,
-  type DokkuError,
-  isProcessType,
-  loadDokkuConfig,
-  logTail,
-} from "./dokku";
+import { createDokku, type DokkuError, loadDokkuConfig, logTail } from "./dokku";
 import { readDokkuHost } from "./host";
 import { createHostMetrics, loadGlancesUrl } from "./metrics";
 import {
@@ -81,6 +79,13 @@ const loggedApp = (body: unknown) =>
       ? body.app
       : "-"
     : "-";
+
+/** Drops what a request changed from the read cache: its app, or for a network operation the networks. */
+const invalidateFor = (req: OperationRequest) => {
+  const app = appOf(req);
+  if (app === null) invalidateNetworks(readCache);
+  else invalidateApp(readCache, app);
+};
 
 /**
  * One stdout line per config change attempt: app, key and outcome, never the value.
@@ -383,10 +388,11 @@ const app = new Hono()
       return c.json(invalid("invalid-body", req), 400);
     }
 
+    const target = targetOf(req);
     // Before any read of the host: a typo in the name costs nothing.
     const confirm = destructiveConfirm(req);
     if (confirm && confirm.typed !== confirm.expected) {
-      logOperation(op, req.app, "refused (confirm-mismatch)", startedAt);
+      logOperation(op, target, "refused (confirm-mismatch)", startedAt);
       const message = `Type ${confirm.expected} to confirm.`;
       return c.json(invalid("confirm-mismatch", message), 400);
     }
@@ -395,7 +401,7 @@ const app = new Hono()
     if (!checked.ok) {
       const { status, kind, message } = checked.refusal;
       const outcome = status === 502 ? `failed (${kind})` : `refused (${kind})`;
-      logOperation(op, req.app, outcome, startedAt);
+      logOperation(op, target, outcome, startedAt);
       return c.json(invalid(kind, message), status);
     }
 
@@ -404,18 +410,18 @@ const app = new Hono()
 
     if (!streamsOutput(req, checked.app)) {
       const result = await runSteps(dokku, steps);
-      invalidateApp(readCache, req.app);
+      invalidateFor(req);
       if (!result.ok) {
-        logOperation(op, req.app, `failed (${result.error.kind})`, startedAt);
+        logOperation(op, target, `failed (${result.error.kind})`, startedAt);
         return c.json({ ok: false, error: result.error } as const, 502);
       }
       const noOp = conflictsOnNoOp(req) ? dokkuNoOp(result.output) : undefined;
       if (noOp) {
-        logOperation(op, req.app, `refused (conflict: ${noOp})`, startedAt);
+        logOperation(op, target, `refused (conflict: ${noOp})`, startedAt);
         return c.json(invalid("conflict", noOp), 409);
       }
       afterSuccess(req, saved);
-      logOperation(op, req.app, "ok", startedAt);
+      logOperation(op, target, "ok", startedAt);
       return c.json({ ok: true, output: result.output } as const);
     }
 
@@ -437,12 +443,12 @@ const app = new Hono()
         end = { kind: "failed", message: e instanceof Error ? e.message : String(e) };
       } finally {
         // A failed deploy can still have changed the app, so drop the cache either way.
-        invalidateApp(readCache, req.app);
+        invalidateFor(req);
         clearInterval(heartbeat);
       }
       logOperation(
         op,
-        req.app,
+        target,
         end.kind === "failed" ? `failed (${end.message})` : "ok",
         startedAt,
       );

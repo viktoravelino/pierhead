@@ -84,3 +84,7 @@ export function invalidateApp(cache: ReadCache, name: string) {
     cacheKeys.config(name),
   );
 }
+
+/** Drops the networks read, which an operation on a network (no app) changes. */
+export const invalidateNetworks = (cache: ReadCache) =>
+  cache.invalidate(cacheKeys.networks);
