@@ -231,6 +231,31 @@ Last, because they change every app's defaults: `domains:add-global`, `domains:r
 
 API: `{ op: "domains:global"; domains: string[] }`, `{ op: "git:deploy-branch"; branch: string | null }`. Invalidation: everything (the host cache and every app). UI: Edit on the Host page rows, with a confirm that lists the apps using the default domain. Effort: S.
 
+### 3.15 Services
+
+Story: see and manage the datastores Dokku runs for apps (postgres, redis, any plugin built on the dokku-service template), and link them to apps, without the CLI.
+
+| Command | Verified behaviour (Dokku 0.38.31, postgres and redis plugins 2.2.0) |
+| --- | --- |
+| `<type>:info [<name>] --format json` | Without a name: one JSON object per service, one line each; with none, `{"message":"There are no <type> services"}` and exit 0. Keys include `service`, `status` (`running`, or `missing` when stopped), `version` (`image:tag`), `links` (comma-joined apps), `exposed-ports` (`-` or `5432->46761`), `data-dir`, `id`, `dsn` and `exposed-dsn`, **both with the password**. 0.4 s. `--dsn` prints just the connection string. |
+| `<type>:list`, `<type>:links`, `<type>:app-links`, `<type>:exists` | Work, but `info` carries all of it in one call per plugin, so pierhead uses only `info`. `list --format json` is `["a","b"]`. |
+| `<type>:create <name> [--image-version <tag>]` | 1 s with the image cached, 24 s for the first postgres (the default image is `timescale/timescaledb`, about 1 GB). Prints the info, password included. An unknown tag fails after the pull attempt and leaves nothing behind. Dokku accepts `Bad_Name` and one-letter names. |
+| `<type>:destroy <name> --force` | 1 s. Without `--force` it prompts for the name and fails without a tty. Refuses while an app is linked, naming it. |
+| `<type>:link <name> <app> [--no-restart]` | Sets `DATABASE_URL`, `REDIS_URL` or `DOKKU_<TYPE>_<COLOR>_URL` (when taken, also for an existing variable of the app) and a `--link` docker option; prints the URL. Restarts a running app (23 s, a `config-redeploy` build record), leaves a stopped one alone, `--no-restart` skips it. Exit 1 "Already linked". |
+| `<type>:unlink <name> <app> [--no-restart]` | Same cost; unsets the variable. |
+| `<type>:start`, `stop`, `restart` | 1 s; `stop` makes `info` say `missing`. |
+| `<type>:logs <name> [--tail=N]` | Without the flag the last 100 lines and exit; `--tail=N` replays N and follows (`--tail N` is refused, `-t` replays 100). |
+| `<type>:export <name>` | The dump on stdout (`PGDMP`, 10 KB for an empty database; `REDIS0015`), warnings on stderr. |
+| `<type>:expose` | Fails for the `dokku` user (Docker socket permission). Not offered. `plugin:install` needs root, so the plugins are installed by `scripts/dev.sh` through `docker exec`. |
+
+Discovery: `plugin:list` entries that are enabled, not core and describe themselves as a `service plugin`; the type is a validated argv element (`^[a-z][a-z0-9-]{1,20}$`) and the allowlist builds `<type>:<verb>` only for the installed ones, so core namespaces such as `nginx` or `apps` never reach it.
+
+API: reads `GET /api/services`, `GET /api/services/:type/:name`, `.../dsn` (the only place the connection string is returned; `no-store`, never logged), `.../logs` (SSE) and `.../export` (download). Operations `service:create|destroy|link|unlink|start|stop|restart`; 400 `unknown-type`, 404 for a service or app, 409 `exists`, `in-use` (destroy while linked), `conflict` (link twice, unlink what is not linked), `unavailable` (start a running service...). `AppDetail.services` lists `{ type, name }`, filled from the same batched read. Every line of Dokku output is masked for `scheme://user:password@`, since create and link print the connection string.
+
+UI: a Services page grouped by plugin (status, masked connection string with Reveal and copy, linked apps with unlink, Start, Stop, Restart, Link, Logs, Export, Destroy with the typed name), a Services panel on the app's Domains & Network tab, palette entries. Every create dialog says the service is not in the lab backup.
+
+Invalidation: the services read, plus the app's reads for a link or unlink. Risks: link restarts a production app; destroy deletes data (typed name, refused while linked). Effort: M.
+
 ## 4. Cross-cutting design
 
 ### Operations table
