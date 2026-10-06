@@ -1,9 +1,8 @@
 // THE SEAM. Every read and action the UI performs goes through this module, and it is the
 // only place that knows which data source is active. In "api" mode apps, host, metrics,
-// networks, logs, config and operations go through the backend (./backend); deploy history,
-// activity and backups, and everything in "mock" mode, are served from fixtures after a
-// small artificial delay. Nothing outside src/api should import
-// mock-data.ts.
+// networks, logs, config, builds, activity and operations go through the backend (./backend);
+// backups in "api" mode, like everything in "mock" mode, are served from fixtures
+// after a small artificial delay. Nothing outside src/api should import mock-data.ts.
 
 import { type ConfigKey, isManagedKey } from "../../shared/config";
 import { commandLine, type OperationRequest } from "../../shared/operations";
@@ -17,6 +16,7 @@ import {
   portsOf,
 } from "../../shared/parse";
 import type {
+  Activity,
   App,
   AppDetail,
   AppSummary,
@@ -31,8 +31,11 @@ import type {
 import {
   ApiError,
   deleteConfigVar,
+  fetchActivity,
   fetchApp,
   fetchApps,
+  fetchBuildOutput,
+  fetchBuilds,
   fetchConfigKeys,
   fetchConfigValue,
   fetchDokku,
@@ -119,6 +122,7 @@ function toApp(raw: RawApp): AppView {
     })),
     canScale: true,
     builder: { selected: null, buildDir: null, dockerfilePath: null },
+    git: { deployBranch: null, computedDeployBranch: null, sourceImage: null },
     resources: [],
     storage: [],
     sample: { summary: raw.summary, lastDeploy },
@@ -233,10 +237,20 @@ export const getStorageUsers: () => Promise<{ app: string; mounts: StorageMount[
 export const getHostDetails: () => Promise<HostDetails> =
   dataSource === "api" ? fetchHostDetails : mockHostDetails;
 
-export async function getActivity() {
+const mockActivity = async (app?: string) => {
   await latency();
-  return activity;
-}
+  return app === undefined ? activity : activity.filter((a) => a.app === app);
+};
+
+/** Newest-first activity for the host, or for one app. */
+export const getActivity: (app?: string) => Promise<Activity[]> =
+  dataSource === "api" ? fetchActivity : mockActivity;
+
+/** The app's Dokku build and deploy records; "api" mode only (the mock has its own `getDeploys`). */
+export const getBuilds = fetchBuilds;
+
+/** One record's log: its newest lines, and whether older ones were left out. */
+export const getBuildOutput = fetchBuildOutput;
 
 export async function getBackup(): Promise<BackupStatus> {
   await latency();

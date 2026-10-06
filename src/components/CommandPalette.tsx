@@ -22,7 +22,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { dataSource } from "../api/client";
 import { operationAvailability, operationUi, psOperationIds } from "../api/operations";
 import { appsQuery } from "../api/queries";
 import { useRequestOperation, useWrites } from "./OperationHost";
@@ -43,15 +42,12 @@ const psIcon = {
   "ps:stop": <Square className="size-4" aria-hidden="true" />,
 } as const satisfies Record<(typeof psOperationIds)[number], ReactNode>;
 
-const allPages = [
+const pages = [
   { label: "Apps", to: "/", Icon: LayoutGrid },
   { label: "Networks", to: "/networks", Icon: Network },
   { label: "Activity", to: "/activity", Icon: Activity },
   { label: "Host", to: "/host", Icon: Server },
 ] as const;
-
-// Activity has no real data source yet.
-const pages = allPages.filter((p) => dataSource === "mock" || p.to !== "/activity");
 
 /** Cmd/Ctrl+K palette: jump to a page or app, or start an app action (when writes are on). */
 export function CommandPalette({

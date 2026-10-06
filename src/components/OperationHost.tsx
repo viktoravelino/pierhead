@@ -196,6 +196,7 @@ export function OperationHost({ children }: { children: ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: networksQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: storageUsersQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: backendHealthQuery.queryKey });
+      void queryClient.invalidateQueries({ queryKey: ["activity"] });
     },
   });
   const pending = mutation.isPending ? mutation.variables : null;
@@ -587,6 +588,52 @@ function Fields({
           app={request.app}
           checked={request.rebuild}
           onChange={(rebuild) => onChange({ ...request, rebuild })}
+        />
+      );
+    case "git:from-image":
+      return (
+        <TextField
+          label="Image"
+          value={request.image}
+          placeholder="nginx:alpine"
+          hint="A public image: registry/path:tag or @sha256:digest, in lowercase."
+          onChange={(image) => onChange({ ...request, image })}
+        />
+      );
+    case "git:sync":
+      return (
+        <>
+          <TextField
+            label="Repository"
+            value={request.url}
+            placeholder="https://github.com/owner/repo"
+            hint="An https:// URL, or git@host:path with a deploy key. No credentials in the URL."
+            onChange={(url) => onChange({ ...request, url })}
+          />
+          <TextField
+            label="Branch, tag or commit (optional)"
+            value={request.ref}
+            placeholder="the repository's default branch"
+            focus={false}
+            onChange={(ref) => onChange({ ...request, ref })}
+          />
+          <Checkbox
+            checked={request.build}
+            onChange={(build) => onChange({ ...request, build })}
+          >
+            Build and deploy now. Without it the source is only fetched: the running
+            containers stay as they are until the next build or rebuild.
+          </Checkbox>
+        </>
+      );
+    case "git:set":
+      return (
+        <TextField
+          label="Deploy branch"
+          value={request.branch}
+          placeholder="main"
+          hint="Empty goes back to Dokku's default."
+          onChange={(branch) => onChange({ ...request, branch })}
         />
       );
     case "builder:set":

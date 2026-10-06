@@ -42,7 +42,7 @@ function BackendStatus() {
   );
 }
 
-const allNav = [
+const nav = [
   {
     label: "Apps",
     to: "/",
@@ -68,9 +68,6 @@ const allNav = [
     isActive: (p: string) => p.startsWith("/host"),
   },
 ] as const;
-
-// Activity has no real data source yet.
-const nav = allNav.filter((item) => dataSource === "mock" || item.to !== "/activity");
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 

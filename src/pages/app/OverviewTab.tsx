@@ -1,13 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { Link } from "@tanstack/react-router";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { formatFormationEntry } from "../../../shared/grammar";
-import type { Build } from "../../../shared/types";
+import type { Build, BuildRecord } from "../../../shared/types";
 import type { AppView } from "../../api/client";
-import { deploysQuery } from "../../api/queries";
+import { buildOutputQuery, buildsQuery, deploysQuery } from "../../api/queries";
 import { DomainLink } from "../../components/DomainLink";
 import { OperationButton, textButton } from "../../components/OperationButton";
-import { DeployBadge, ProcessBadge } from "../../components/Signal";
-import { EmptyNote, Mono, Panel, RevisionStamp, Skeleton } from "../../components/ui";
+import { BuildBadge, DeployBadge, ProcessBadge } from "../../components/Signal";
+import {
+  EmptyNote,
+  ErrorNote,
+  Mono,
+  Panel,
+  RevisionStamp,
+  Skeleton,
+} from "../../components/ui";
 import { formatDuration, relativeTime } from "../../lib/time";
 
 const buildLabel = (build: Build) => {
@@ -68,6 +76,131 @@ function DeployHistory({ name }: { name: string }) {
   );
 }
 
+/** Seconds a record took, null while it runs. */
+const secondsOf = ({ startedAt, finishedAt }: BuildRecord) =>
+  finishedAt === null
+    ? null
+    : Math.max(0, Math.round((Date.parse(finishedAt) - Date.parse(startedAt)) / 1000));
+
+/** One record's log in a modal: the newest lines Dokku kept, in a scrolling block. */
+function BuildOutputDialog({
+  name,
+  build,
+  onClose,
+}: {
+  name: string;
+  build: BuildRecord;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const { data, error, isPending, isFetching, refetch } = useQuery(
+    buildOutputQuery(name, build.id),
+  );
+  useEffect(() => {
+    const dialog = ref.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby="build-output-title"
+      onClose={onClose}
+      className="m-auto max-h-[calc(100dvh-1.5rem)] w-[min(52rem,calc(100vw-1.5rem))] overflow-y-auto rounded-md border border-line-strong bg-raised p-0 shadow-2xl shadow-black/40"
+    >
+      <div className="flex flex-col gap-4 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="build-output-title" className="text-lg font-semibold">
+            <span className="capitalize">{build.kind}</span> output{" "}
+            <Mono className="text-dim">{build.id}</Mono>
+          </h2>
+          <BuildBadge status={build.status} />
+        </div>
+        {error ? (
+          <ErrorNote error={error} onRetry={() => void refetch()} retrying={isFetching} />
+        ) : (
+          <pre className="h-[28rem] overflow-auto rounded-sm border border-line bg-sunken px-3 py-2.5 font-mono text-xs leading-5 whitespace-pre-wrap break-words">
+            {isPending
+              ? "Loading..."
+              : data.lines.join("\n").trim() || "Dokku kept no output for this record."}
+          </pre>
+        )}
+        {data?.truncated && (
+          <p className="text-xs text-faint">Only the newest {data.lines.length} lines.</p>
+        )}
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => ref.current?.close()}
+            className="h-9 rounded-sm border border-line-strong px-3.5 font-medium hover:bg-sunken"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
+/** Dokku's own build and deploy records (`builds:list`, the last 20), each with its log. */
+function BuildHistory({ name }: { name: string }) {
+  const { data, error, isPending, isFetching, refetch } = useQuery(buildsQuery(name));
+  const [shown, setShown] = useState<BuildRecord | null>(null);
+  return (
+    <Panel title="Deploy history">
+      {error && !data ? (
+        <ErrorNote error={error} onRetry={() => void refetch()} retrying={isFetching} />
+      ) : isPending || !data ? (
+        <div className="flex flex-col gap-3 p-4">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </div>
+      ) : data.length === 0 ? (
+        <EmptyNote>Dokku has no build or deploy records for this app.</EmptyNote>
+      ) : (
+        <ol className="divide-y divide-line">
+          {data.map((b) => {
+            const took = secondsOf(b);
+            return (
+              <li
+                key={b.id}
+                className="grid items-center gap-x-4 gap-y-1 px-4 py-3 md:grid-cols-[minmax(0,1fr)_7rem_9rem_4.5rem]"
+              >
+                <p className="min-w-0 truncate">
+                  <span className="capitalize">{b.kind}</span>{" "}
+                  <Mono className="text-dim">{b.source}</Mono>
+                </p>
+                <div>
+                  <BuildBadge status={b.status} />
+                </div>
+                <p className="tabular text-xs text-faint md:text-right">
+                  <time
+                    dateTime={b.startedAt}
+                    title={new Date(b.startedAt).toLocaleString()}
+                  >
+                    {relativeTime(b.startedAt)}
+                  </time>
+                  {took !== null && ` · ${formatDuration(took)}`}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShown(b)}
+                  aria-label={`Output of ${b.kind} ${b.id}`}
+                  className="h-8 rounded-sm border border-line-strong px-2.5 text-sm font-medium hover:bg-raised md:justify-self-end"
+                >
+                  Output
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      {shown && (
+        <BuildOutputDialog name={name} build={shown} onClose={() => setShown(null)} />
+      )}
+    </Panel>
+  );
+}
+
 export function OverviewTab({ app }: { app: AppView }) {
   const { sample } = app;
   return (
@@ -122,9 +255,21 @@ export function OverviewTab({ app }: { app: AppView }) {
         >
           {app.processes.length === 0 && (
             <EmptyNote>
-              {app.status.kind === "not-deployed"
-                ? "No processes. This app has never been deployed."
-                : "No processes."}
+              {app.status.kind === "not-deployed" ? (
+                <>
+                  No processes. This app has never been deployed.{" "}
+                  <Link
+                    to="/apps/$appName"
+                    params={{ appName: app.name }}
+                    search={{ tab: "settings" }}
+                    className="font-medium text-accent hover:underline"
+                  >
+                    Deploy an image or a repository
+                  </Link>
+                </>
+              ) : (
+                "No processes."
+              )}
             </EmptyNote>
           )}
           <ul className="divide-y divide-line">
@@ -208,7 +353,7 @@ export function OverviewTab({ app }: { app: AppView }) {
         </Panel>
       </div>
 
-      {sample && <DeployHistory name={app.name} />}
+      {sample ? <DeployHistory name={app.name} /> : <BuildHistory name={app.name} />}
     </div>
   );
 }
