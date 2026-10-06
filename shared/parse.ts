@@ -438,6 +438,8 @@ export function parseAppDetail(name: string, r: DetailReports): AppDetail {
     git: parseGitSettings(r.git),
     resources: parseResources(r.resource),
     storage: parseStorage(r.storage),
+    // The server adds them from its services read; Dokku's app reports do not list them.
+    services: [],
   };
 }
 

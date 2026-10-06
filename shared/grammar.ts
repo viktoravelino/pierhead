@@ -242,3 +242,26 @@ export const isGitRef = (ref: string) =>
     .every(
       (part) => !part.startsWith(".") && !part.endsWith(".") && !part.endsWith(".lock"),
     );
+
+/**
+ * A service plugin's type, the namespace of its commands (`postgres` in `postgres:create`).
+ * It ends up as the first word of an argv element, so it is held to one short lowercase
+ * word; the server also requires it to be an installed service plugin.
+ */
+export const isServiceType = (type: string) => /^[a-z][a-z0-9-]{1,20}$/.test(type);
+
+/**
+ * A name for a new service: lowercase letters, digits and inner hyphens, starting with a
+ * letter, 2 to 40 characters. Dokku accepts `[A-Za-z0-9_-]+`, but the name becomes a
+ * database name, a container name and a hostname.
+ */
+export const isNewServiceName = (name: string) =>
+  /^[a-z][a-z0-9-]{0,38}[a-z0-9]$/.test(name);
+
+/** The name of a service Dokku already holds: anything its own grammar allows, minus a leading `-`. */
+export const isServiceName = (name: string) =>
+  /^[A-Za-z0-9_][A-Za-z0-9_-]{0,62}$/.test(name);
+
+/** An image tag for `--image-version`: Docker's tag grammar, so never a flag. */
+export const isServiceVersion = (version: string) =>
+  /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(version);
