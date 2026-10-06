@@ -201,6 +201,42 @@ export const operationUi = {
       "Stops the name resolving to the app's containers once it is redeployed; the running container keeps it until then.",
     tone: "danger",
   },
+  "apps:unlock": {
+    label: "Release lock",
+    title: "Release the deploy lock of {target}?",
+    pending: "Releasing...",
+    done: "Released the deploy lock of {target}.",
+    effect:
+      "Removes the lock a failed deploy left behind, so operations on the app work again. Pierhead refuses while Dokku has a build or deploy record still running for the app: releasing the lock under a deploy that is really under way lets a second one start on top of it.",
+    tone: "danger",
+  },
+  "git:from-image": {
+    label: "Deploy image",
+    title: "Deploy an image to {target}",
+    pending: "Deploying...",
+    done: "Deployed an image to {target}.",
+    effect:
+      "Pulls the image and deploys it, replacing the running containers (about 25 s for a small, cached image). The image must be public. The app's source becomes this image until code is pushed or synced again.",
+    tone: "neutral",
+  },
+  "git:sync": {
+    label: "Sync",
+    title: "Sync {target} from git",
+    pending: "Syncing...",
+    done: "Synced {target} from git.",
+    effect:
+      "Clones or fetches the repository into the app. Built and deployed, it replaces the running containers like a push does; without the build the source is only fetched and nothing changes until the next build. The Dokku host fetches the URL itself, with its own network access and keys, so a private repository works only if the host has credentials for it. A build that fails can leave Dokku's deploy lock held, which refuses every other operation until it is released from the Settings tab.",
+    tone: "neutral",
+  },
+  "git:set": {
+    label: "Save",
+    title: "Set the deploy branch of {target}",
+    pending: "Saving...",
+    done: "Saved the deploy branch of {target}.",
+    effect:
+      "The branch a push or sync deploys from. Empty goes back to Dokku's default. Takes effect on the next deploy.",
+    tone: "neutral",
+  },
   "builder:set": {
     label: "Save",
     title: "Change a builder setting of {target}",

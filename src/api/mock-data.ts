@@ -372,87 +372,48 @@ export const hostDetails: HostDetails = {
   },
 };
 
+/** A recorded operation, as the API's activity feed carries it. */
+const operation = (id: string, at: string, op: string, app: string): Activity => ({
+  kind: "operation",
+  id,
+  at,
+  op,
+  app,
+  target: app,
+  actor: null,
+  outcome: "ok",
+  durationMs: 24_000,
+  message: "",
+  builds: [],
+});
+
+/** A Dokku build record nobody at pierhead started (a `git push`). */
+const pushed = (id: string, at: string, app: string, ok: boolean): Activity => ({
+  kind: "build",
+  id,
+  at,
+  app,
+  build: {
+    id,
+    kind: "build",
+    source: "git push",
+    status: ok ? "succeeded" : "failed",
+    startedAt: at,
+    finishedAt: at,
+    exitCode: ok ? 0 : 1,
+  },
+});
+
 export const activity: Activity[] = [
-  {
-    id: "a-1",
-    at: ago(90_000),
-    kind: "deploy",
-    app: "signal-flags",
-    rev: "7d21c9f",
-    ok: true,
-  },
-  {
-    id: "a-2",
-    at: ago(25 * minute),
-    kind: "restart",
-    app: "lighthouse",
-    reason: "worker.1 exited with status 2",
-  },
-  {
-    id: "a-3",
-    at: ago(41 * minute),
-    kind: "restart",
-    app: "lighthouse",
-    reason: "worker.1 exited with status 2",
-  },
-  {
-    id: "a-4",
-    at: ago(5 * hour),
-    kind: "deploy",
-    app: "lighthouse",
-    rev: "d4c18e5",
-    ok: true,
-  },
-  { id: "a-5", at: ago(16 * hour), kind: "backup", ok: true, sizeMb: 212, durationS: 38 },
-  {
-    id: "a-6",
-    at: ago(2 * day + 3 * hour),
-    kind: "deploy",
-    app: "insta-down",
-    rev: "e41b7c0",
-    ok: true,
-  },
-  {
-    id: "a-7",
-    at: ago(2 * day + 4 * hour),
-    kind: "deploy",
-    app: "insta-down-api",
-    rev: "5f8a31e",
-    ok: true,
-  },
-  {
-    id: "a-8",
-    at: ago(2 * day + 16 * hour),
-    kind: "backup",
-    ok: true,
-    sizeMb: 209,
-    durationS: 41,
-  },
-  {
-    id: "a-9",
-    at: ago(3 * day),
-    kind: "deploy",
-    app: "signal-flags",
-    rev: "0ee48b3",
-    ok: true,
-  },
-  {
-    id: "a-10",
-    at: ago(3 * day + 16 * hour),
-    kind: "backup",
-    ok: false,
-    sizeMb: 0,
-    durationS: 12,
-  },
-  {
-    id: "a-11",
-    at: ago(6 * day + 2 * hour),
-    kind: "deploy",
-    app: "insta-down",
-    rev: "3c5d1ab",
-    ok: false,
-  },
-  { id: "a-12", at: ago(19 * day), kind: "stop", app: "ledger-lite" },
+  pushed("a-1", ago(90_000), "signal-flags", true),
+  operation("a-2", ago(25 * minute), "ps:restart", "lighthouse"),
+  operation("a-3", ago(41 * minute), "ps:restart", "lighthouse"),
+  pushed("a-4", ago(5 * hour), "lighthouse", true),
+  pushed("a-6", ago(2 * day + 3 * hour), "insta-down", true),
+  pushed("a-7", ago(2 * day + 4 * hour), "insta-down-api", true),
+  pushed("a-9", ago(3 * day), "signal-flags", true),
+  pushed("a-11", ago(6 * day + 2 * hour), "insta-down", false),
+  operation("a-12", ago(19 * day), "ps:stop", "ledger-lite"),
 ];
 
 /** Most recent time today or yesterday that the local clock read hh:mm. */

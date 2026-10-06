@@ -2,8 +2,16 @@ import { formatPortMapping, storageHostPath } from "../shared/grammar";
 import { type OperationRequest, operationAvailability } from "../shared/operations";
 import { stripAnsi } from "../shared/parse";
 import type { AppDetail, PortMapping, ProxyRestore } from "../shared/types";
-import { domainOwners, getApp, isNotFound, listNetworks } from "./apps";
+import {
+  domainOwners,
+  getApp,
+  getBuilds,
+  isNotFound,
+  listNetworks,
+  noLock,
+} from "./apps";
 import type { DokkuError, DokkuRun, DokkuSteps } from "./dokku";
+import type { StateStore } from "./state";
 
 // What `POST /api/operations/:op` does around the shared table: checks against the live
 // host before anything runs, running the steps, and the one thing pierhead remembers.
@@ -25,9 +33,6 @@ const refused = (status: 409, kind: string, message: string): Preflight => ({
   ok: false,
   refusal: { status, kind, message },
 });
-
-/** Dokku's `apps:locked` text for an app with no deploy lock (it exits 1 then). */
-const noLock = "Deploy lock does not exist";
 
 /**
  * Whether the request makes sense on the host right now, run after the body parsed and
@@ -57,6 +62,8 @@ export async function preflight(
     return networkPreflight(dokku, req);
   }
 
+  if (req.op === "apps:unlock") return unlockPreflight(dokku, req.app);
+
   // Dokku's deploy lock is the only sign of a deploy in progress (no report shows one);
   // it also catches the rebuild or proxy toggle this server is streaming.
   const lock = await dokku("apps:locked", req.app);
@@ -64,7 +71,7 @@ export async function preflight(
     return refused(
       409,
       "deploy-in-progress",
-      `${req.app} holds a deploy lock: a deploy is running, or one died and left it (clear it with \`dokku apps:unlock ${req.app}\`).`,
+      `${req.app} holds a deploy lock: a deploy is running, or a failed one left it behind. Once no build is running, release it from the app's Settings tab (Release lock) or with \`dokku apps:unlock ${req.app}\`.`,
     );
   }
   if (!lock.error.message.includes(noLock)) {
@@ -175,6 +182,9 @@ export async function preflight(
     case "ps:restart":
     case "ps:rebuild":
     case "ps:scale":
+    case "git:from-image":
+    case "git:sync":
+    case "git:set":
     case "builder:set":
     case "resource:set":
     case "resource:clear":
@@ -185,6 +195,32 @@ export async function preflight(
     case "proxy:disable":
       return { ok: true, app };
   }
+}
+
+/**
+ * `apps:unlock`: only while the lock exists and no build record of the app is still
+ * running (a deploy that is really under way holds the lock legitimately). Records of a
+ * build that died read as `abandoned`, not running, so they do not block it.
+ */
+async function unlockPreflight(dokku: DokkuRun, app: string): Promise<Preflight> {
+  const lock = await dokku("apps:locked", app);
+  if (!lock.ok) {
+    if (lock.error.message.includes(noLock)) {
+      return refused(409, "unavailable", `${app} holds no deploy lock.`);
+    }
+    return { ok: false, refusal: failure(lock.error) };
+  }
+  const builds = await getBuilds(dokku, app);
+  if (!builds.ok) return { ok: false, refusal: failure(builds.error) };
+  const running = builds.value.find((b) => b.status === "running");
+  if (running) {
+    return refused(
+      409,
+      "build-running",
+      `${app} has a ${running.kind} still running (${running.source}, started ${running.startedAt}); releasing the lock now would let a second deploy start on top of it.`,
+    );
+  }
+  return { ok: true, app: null };
 }
 
 /**
@@ -275,13 +311,6 @@ const samePort = (a: PortMapping, b: PortMapping) =>
   a.scheme === b.scheme && a.host === b.host && a.container === b.container;
 
 /**
- * What apps had when their proxy was disabled through pierhead: Dokku clears the port map
- * and the domains then, and `proxy:enable` brings back only the default domain. In
- * memory: a restart forgets them, and the enable dialog then has nothing to restore.
- */
-export const proxyRestore = new Map<string, ProxyRestore>();
-
-/**
  * Read from the live detail before `proxy:disable` runs: what it is about to clear (set
  * ports, custom domains), null when there is nothing to lose or for any other request.
  */
@@ -296,18 +325,25 @@ export function restoreToSave(req: OperationRequest, app: AppDetail | null) {
   return ports.length > 0 || domains.length > 0 ? { ports, domains } : null;
 }
 
-/** Bookkeeping after a request succeeded; `saved` is what `restoreToSave` read. */
-export function afterSuccess(req: OperationRequest, saved: ProxyRestore | null) {
+/**
+ * Bookkeeping after a request succeeded; `saved` is what `restoreToSave` read. What a
+ * disable cleared is kept in the state store, so a restart does not forget it.
+ */
+export function afterSuccess(
+  store: Pick<StateStore, "saveRestore" | "clearRestore">,
+  req: OperationRequest,
+  saved: ProxyRestore | null,
+) {
   switch (req.op) {
     case "proxy:disable":
-      if (saved) proxyRestore.set(req.app, saved);
-      else proxyRestore.delete(req.app);
+      if (saved) store.saveRestore(req.app, saved);
+      else store.clearRestore(req.app);
       return;
     // A new app must not inherit a destroyed one's entry, and an enable consumes it.
     case "proxy:enable":
     case "apps:create":
     case "apps:destroy":
-      proxyRestore.delete(req.app);
+      store.clearRestore(req.app);
       return;
     default:
       return;

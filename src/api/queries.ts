@@ -5,6 +5,8 @@ import {
   getApp,
   getApps,
   getBackup,
+  getBuildOutput,
+  getBuilds,
   getConfig,
   getDeploys,
   getHost,
@@ -31,10 +33,13 @@ export const hostMetricsQuery = queryOptions({
   refetchInterval: 5_000,
 });
 export const appsQuery = queryOptions({ queryKey: ["apps"], queryFn: getApps, ...poll });
-export const activityQuery = queryOptions({
-  queryKey: ["activity"],
-  queryFn: getActivity,
-});
+/** Newest-first activity for the host, or for one app; the server sends 50 rows unless `limit` says more. */
+export const activityQuery = (app?: string, limit?: number) =>
+  queryOptions({
+    queryKey: ["activity", app ?? null, limit ?? null],
+    queryFn: () => getActivity(app, limit),
+    ...poll,
+  });
 export const backupQuery = queryOptions({ queryKey: ["backup"], queryFn: getBackup });
 export const networksQuery = queryOptions({
   queryKey: ["networks"],
@@ -58,5 +63,19 @@ export const appQuery = (name: string) =>
   queryOptions({ queryKey: ["apps", name], queryFn: () => getApp(name), ...poll });
 export const deploysQuery = (name: string) =>
   queryOptions({ queryKey: ["apps", name, "deploys"], queryFn: () => getDeploys(name) });
+export const buildsQuery = (name: string) =>
+  queryOptions({
+    queryKey: ["apps", name, "builds"],
+    queryFn: () => getBuilds(name),
+    ...poll,
+  });
+export const buildOutputQuery = (name: string, id: string) =>
+  queryOptions({
+    queryKey: ["apps", name, "builds", id, "output"],
+    queryFn: () => getBuildOutput(name, id),
+    // A finished log does not change; a running one is read again.
+    staleTime: 0,
+    retry: false,
+  });
 export const configQuery = (app: AppView) =>
   queryOptions({ queryKey: ["apps", app.name, "config"], queryFn: () => getConfig(app) });

@@ -70,6 +70,13 @@ export type BuilderSettings = {
   dockerfilePath: string | null;
 };
 
+/** `git:report`: the branch the app sets itself, the one Dokku deploys, and the image of a `git:from-image` deploy. */
+export type GitSettings = {
+  deployBranch: string | null;
+  computedDeployBranch: string | null;
+  sourceImage: string | null;
+};
+
 export type ResourceKind = "limit" | "reserve";
 
 /** Docker's `--memory` and `--cpu` values, as Dokku stores them; null where unset. */
@@ -131,7 +138,10 @@ export type AppDetail = AppCommon & {
   formation: FormationEntry[];
   /** False when `ps:report` says Dokku will not scale the app. */
   canScale: boolean;
+  /** Whether Dokku's deploy lock is held (a deploy runs, or a failed one left it). */
+  locked: boolean;
   builder: BuilderSettings;
+  git: GitSettings;
   resources: ResourceEntry[];
   storage: StorageMount[];
   /**
@@ -142,7 +152,7 @@ export type AppDetail = AppCommon & {
   /**
    * The port map and domains the app had when pierhead disabled its proxy (Dokku clears
    * both, and `proxy:enable` brings back only the default domain). Only the API server
-   * knows them, in memory.
+   * knows them, from its state directory.
    */
   proxyRestore?: ProxyRestore;
 };
@@ -315,15 +325,66 @@ export type HostDetails = {
   pierhead: PierheadConfig;
 };
 
+/** `abandoned`: a record whose build died without Dokku closing it (a failed `git:sync`), which `status` keeps calling running. */
+export type BuildStatus =
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "abandoned"
+  | "canceled"
+  | "other";
+
+/** One record of Dokku's `builds` plugin: a build or a deploy of an app, as `builds:list` prints it. */
+export type BuildRecord = {
+  id: string;
+  kind: "build" | "deploy";
+  /** What started it: `git:from-image`, `ps:rebuild`, `config-redeploy`, `ps:restart`, a git push... */
+  source: string;
+  status: BuildStatus;
+  /** ISO timestamp */
+  startedAt: string;
+  /** Null while it runs. */
+  finishedAt: string | null;
+  /** Dokku's exit code; negative for a record it closed itself (a build that was cut short). */
+  exitCode: number | null;
+};
+
+/** What the recorder keeps of every operation attempt: never a config value. */
+export type OperationRecord = {
+  /** ISO timestamp of when the attempt began. */
+  at: string;
+  /** An operation id, or `config:set` / `config:unset`. */
+  op: string;
+  /** Null for operations on a network. */
+  app: string | null;
+  /** The app, else the network. */
+  target: string;
+  /** `X-Pierhead-User`, when a proxy in front sets it. */
+  actor: string | null;
+  /** `refused` never reached Dokku (writes off, bad body, a conflict with host state). */
+  outcome: "ok" | "refused" | "failed";
+  durationMs: number;
+  /** Why it was refused or failed; short, empty for `ok`. */
+  message: string;
+  /** Config changes only: whether it restarted (redeployed) the app, which is what leaves a Dokku build record. */
+  restart?: boolean;
+};
+
+/**
+ * One row of the activity feed. A build Dokku recorded for something pierhead did is
+ * folded into that operation's row (`builds`), so it does not appear twice.
+ */
 export type Activity = {
   id: string;
   /** ISO timestamp */
   at: string;
 } & (
-  | { kind: "deploy"; app: string; rev: string; ok: boolean }
-  | { kind: "restart"; app: string; reason: string }
-  | { kind: "stop"; app: string }
-  | { kind: "backup"; ok: boolean; sizeMb: number; durationS: number }
+  | (Omit<OperationRecord, "at"> & {
+      kind: "operation";
+      /** Ids of the Dokku build records this operation caused. */
+      builds: string[];
+    })
+  | { kind: "build"; app: string; build: BuildRecord }
 );
 
 export type BackupStatus = {

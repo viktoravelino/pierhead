@@ -10,7 +10,7 @@ import {
   textButton,
 } from "../../components/OperationButton";
 import { useRequestOperation, useWrites } from "../../components/OperationHost";
-import { EmptyNote, Mono, Panel } from "../../components/ui";
+import { EmptyNote, Mono, Panel, RevisionStamp } from "../../components/ui";
 
 const notSet = <span className="text-faint">not set</span>;
 
@@ -97,8 +97,138 @@ function BuilderPanel({ app }: { app: AppView }) {
             </div>
           );
         })}
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+          <div className="min-w-0">
+            <dt className="label">Deploy branch</dt>
+            <dd className="truncate">
+              {app.git.deployBranch ? (
+                <Mono>{app.git.deployBranch}</Mono>
+              ) : (
+                <span className="text-faint">
+                  default
+                  {app.git.computedDeployBranch && (
+                    <>
+                      {" "}
+                      (<Mono>{app.git.computedDeployBranch}</Mono>)
+                    </>
+                  )}
+                </span>
+              )}
+            </dd>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <OperationButton
+              app={app}
+              request={{
+                op: "git:set",
+                app: app.name,
+                branch: app.git.deployBranch ?? "",
+              }}
+              label="Edit Deploy branch"
+              className={textButton}
+            >
+              Edit
+            </OperationButton>
+            {app.git.deployBranch && (
+              <OperationButton
+                app={app}
+                request={{ op: "git:set", app: app.name, branch: "" }}
+                label="Clear Deploy branch"
+                className={removeButton}
+              >
+                <X className="size-4" aria-hidden="true" />
+              </OperationButton>
+            )}
+          </div>
+        </div>
       </dl>
       <Note>Changes take effect on the next build. Rebuild applies them now.</Note>
+    </Panel>
+  );
+}
+
+/** What the app is running from, and the two ways to deploy something else onto it. */
+function DeploySourcePanel({ app }: { app: AppView }) {
+  const { revision, git } = app;
+  return (
+    <Panel
+      title="Deploy source"
+      action={
+        <div className="flex gap-2">
+          <OperationButton
+            app={app}
+            request={{ op: "git:from-image", app: app.name, image: "" }}
+            label="Deploy an image"
+            className={textButton}
+          >
+            Deploy image
+          </OperationButton>
+          <OperationButton
+            app={app}
+            request={{
+              op: "git:sync",
+              app: app.name,
+              url: "",
+              ref: "",
+              build: true,
+            }}
+            label="Sync from git"
+            className={textButton}
+          >
+            Sync from git
+          </OperationButton>
+        </div>
+      }
+    >
+      <dl className="divide-y divide-line">
+        <div className="px-4 py-2.5">
+          <dt className="label">Image</dt>
+          <dd>
+            {git.sourceImage ? (
+              <Mono>{git.sourceImage}</Mono>
+            ) : (
+              <span className="text-faint">none</span>
+            )}
+          </dd>
+        </div>
+        <div className="px-4 py-2.5">
+          <dt className="label">Revision</dt>
+          <dd className="flex flex-wrap items-baseline gap-x-2">
+            {revision ? (
+              <RevisionStamp revision={revision} />
+            ) : (
+              <span className="text-faint">No code yet</span>
+            )}
+          </dd>
+        </div>
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+          <div className="min-w-0">
+            <dt className="label">Deploy lock</dt>
+            <dd>
+              {app.locked ? (
+                <span className="text-warn">
+                  Held: a deploy is running, or a failed one left it behind
+                </span>
+              ) : (
+                <span className="text-faint">free</span>
+              )}
+            </dd>
+          </div>
+          <OperationButton
+            app={app}
+            request={{ op: "apps:unlock", app: app.name }}
+            label="Release lock"
+            className={textButton}
+          >
+            Release lock
+          </OperationButton>
+        </div>
+      </dl>
+      <Note>
+        Deploying replaces the running containers. A repository without "build now" is
+        only fetched. Public sources only; private repositories need Dokku's own{" "}
+        <Mono>git:auth</Mono>, which pierhead does not drive.
+      </Note>
     </Panel>
   );
 }
@@ -307,6 +437,7 @@ export function SettingsTab({ app }: { app: AppView }) {
           empty. Reload to try again.
         </p>
       )}
+      <DeploySourcePanel app={app} />
       <BuilderPanel app={app} />
       <ResourcesPanel app={app} />
       <StoragePanel app={app} />

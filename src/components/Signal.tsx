@@ -1,4 +1,10 @@
-import type { AppStatus, Deploy, DeployStep, ProcessState } from "../../shared/types";
+import type {
+  AppStatus,
+  BuildStatus,
+  Deploy,
+  DeployStep,
+  ProcessState,
+} from "../../shared/types";
 
 // Status is carried by shape and label as well as colour: circle = healthy, pennant =
 // underway, diamond = fault, hollow square = idle, dashed hollow circle = not there yet.
@@ -131,5 +137,23 @@ export function DeployBadge({ status }: { status: Deploy["status"] }) {
       return <Signal tone="crit" label="Failed" />;
     case "in-progress":
       return <Signal tone="warn" label="In progress" pulse />;
+  }
+}
+
+/** A Dokku build or deploy record's status. */
+export function BuildBadge({ status }: { status: BuildStatus }) {
+  switch (status) {
+    case "succeeded":
+      return <Signal tone="ok" label="Succeeded" />;
+    case "failed":
+      return <Signal tone="crit" label="Failed" />;
+    case "abandoned":
+      return <Signal tone="crit" label="Abandoned" />;
+    case "running":
+      return <Signal tone="warn" label="Running" pulse />;
+    case "canceled":
+      return <Signal tone="idle" label="Canceled" />;
+    case "other":
+      return <Signal tone="idle" label="Unknown" />;
   }
 }

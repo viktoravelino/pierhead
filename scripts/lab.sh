@@ -13,6 +13,8 @@ set +a
 # Read-only is not configurable here, whatever .env.lab or the calling shell says.
 unset PIERHEAD_ALLOW_WRITES
 
+# Not the Docker stack's .dev/state: its activity log is about a different Dokku.
+export PIERHEAD_STATE_DIR=.dev/lab-state
 export PORT=3002
 export API_URL=http://127.0.0.1:3002
 export VITE_DATA_SOURCE=api

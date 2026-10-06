@@ -14,6 +14,7 @@ import {
 import type { AppStatus } from "./types";
 
 const app = "hello";
+const digestImage = `ghcr.io/dokku/smoke:1.2@sha256:${"a".repeat(64)}`;
 const http80 = { scheme: "http", host: 80, container: 5000 };
 const http8081 = { scheme: "http", host: 8081, container: 5000 };
 
@@ -98,6 +99,37 @@ const valid = {
   "network:alias-remove": {
     req: { op: "network:alias-remove", app, alias: "api", rebuild: false },
     argv: [["docker-options:remove", app, "deploy", "--network-alias api"]],
+  },
+  "apps:unlock": { req: { op: "apps:unlock", app }, argv: [["apps:unlock", app]] },
+  "git:from-image": {
+    req: {
+      op: "git:from-image",
+      app,
+      image: digestImage,
+    },
+    argv: [["git:from-image", app, digestImage]],
+  },
+  "git:sync": {
+    req: {
+      op: "git:sync",
+      app,
+      url: "https://github.com/crccheck/docker-hello-world",
+      ref: "master",
+      build: true,
+    },
+    argv: [
+      [
+        "git:sync",
+        "--build",
+        app,
+        "https://github.com/crccheck/docker-hello-world",
+        "master",
+      ],
+    ],
+  },
+  "git:set": {
+    req: { op: "git:set", app, branch: "main" },
+    argv: [["git:set", app, "deploy-branch", "main"]],
   },
   "builder:set": {
     req: { op: "builder:set", app, property: "build-dir", value: "backend" },
@@ -281,6 +313,49 @@ describe("operations table", () => {
     ).toEqual({ op: "resource:clear", app, kind: "limit", processType: null });
   });
 
+  test("git:sync without a build or a ref is just the URL; an empty branch clears", () => {
+    const url = "git@github.com:owner/repo.git";
+    expect(commandSteps({ op: "git:sync", app, url, ref: "", build: false })).toEqual([
+      ["git:sync", app, url],
+    ]);
+    expect(commandSteps({ op: "git:set", app, branch: "" })).toEqual([
+      ["git:set", app, "deploy-branch"],
+    ]);
+  });
+
+  test("both deploys stream whatever the app is doing; setting the branch does not", () => {
+    for (const status of [{ kind: "running" }, { kind: "not-deployed" }] as const) {
+      expect(streamsOutput(valid["git:from-image"].req, { status })).toBe(true);
+      expect(streamsOutput(valid["git:sync"].req, { status })).toBe(true);
+    }
+    expect(streamsOutput(valid["git:set"].req, null)).toBe(false);
+  });
+
+  test("apps:unlock is available only while the lock is held, even mid-deploy", () => {
+    const state = {
+      status: { kind: "running" },
+      revision: null,
+      proxyEnabled: true,
+    } as const;
+    expect(operationAvailability("apps:unlock", { ...state, locked: true })).toEqual({
+      ok: true,
+    });
+    expect(operationAvailability("apps:unlock", state)).toMatchObject({ ok: false });
+    expect(
+      operationAvailability("apps:unlock", { ...state, locked: false }),
+    ).toMatchObject({
+      ok: false,
+    });
+    // Everything else is refused while a deploy runs; unlocking is what remains.
+    expect(
+      operationAvailability("apps:unlock", {
+        ...state,
+        status: { kind: "deploying", step: "build" },
+        locked: true,
+      }),
+    ).toEqual({ ok: true });
+  });
+
   test("rebuild streams; proxy toggles stream once deployed", () => {
     const running = { status: { kind: "running" } } as const;
     const fresh = { status: { kind: "not-deployed" } } as const;
@@ -304,6 +379,44 @@ describe("request validation", () => {
     for (const bad of ["-h", "Bad_Name", "a b", "a;b", "../etc", ""]) {
       refused("ps:stop", { app: bad });
     }
+  });
+
+  test("git:from-image refuses anything but an image reference", () => {
+    for (const image of [
+      "-x",
+      "nginx:alpine; rm",
+      "nginx alpine",
+      "NGINX",
+      "",
+      "nginx:",
+    ]) {
+      refused("git:from-image", { app, image });
+    }
+    refused("git:from-image", { app, image: 7 });
+    refused("git:from-image", { app: "-h", image: "nginx" });
+  });
+
+  test("git:sync refuses local paths, credentials, flags and odd refs", () => {
+    const url = "https://github.com/owner/repo";
+    for (const bad of [
+      "file:///tmp",
+      "/tmp/x",
+      "-x",
+      "https://user:token@github.com/owner/repo",
+      "https://github.com/owner/repo extra",
+      "ssh://git@host/owner/repo",
+      "",
+    ]) {
+      refused("git:sync", { app, url: bad, ref: "", build: true });
+    }
+    for (const ref of ["-x", "a b", "a;b", "../x", "a..b"]) {
+      refused("git:sync", { app, url, ref, build: true });
+    }
+    refused("git:sync", { app, url, ref: "", build: "yes" });
+  });
+
+  test("git:set refuses a branch that could be a flag", () => {
+    for (const branch of ["-x", "a b", "../x"]) refused("git:set", { app, branch });
   });
 
   test("apps:create enforces the new-app grammar", () => {

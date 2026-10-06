@@ -106,8 +106,8 @@ reset() {
   docker network rm hello-net 2>/dev/null || true
   # Anything labelled at deploy time that survived (e.g. Dokku was already stopped).
   docker ps -aq --filter label=pierhead.dev=1 | xargs docker rm -f 2>/dev/null || true
-  # A fresh Dokku gets fresh host keys.
-  rm -f .dev/state/known_hosts
+  # A fresh Dokku gets fresh host keys, and no history.
+  rm -f .dev/state/known_hosts .dev/state/activity.jsonl .dev/state/proxy-restore.json
 }
 
 case "${1:-}" in

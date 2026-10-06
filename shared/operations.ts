@@ -9,6 +9,9 @@ import {
   isCpu,
   isDomain,
   isExistingStorageName,
+  isGitRef,
+  isGitUrl,
+  isImageRef,
   isMemory,
   isNetworkAlias,
   isNetworkName,
@@ -85,6 +88,14 @@ type OperationArgs = {
   };
   "network:alias-add": { app: string; alias: string; rebuild: boolean };
   "network:alias-remove": { app: string; alias: string; rebuild: boolean };
+  /** Releases Dokku's deploy lock, which a failed deploy can leave held; the server refuses while a build record is running. */
+  "apps:unlock": { app: string };
+  /** Replaces the app's code with a public image and deploys it. */
+  "git:from-image": { app: string; image: string };
+  /** Fetches a repository into the app; `build` also builds and deploys it. An empty `ref` is the remote's default branch. */
+  "git:sync": { app: string; url: string; ref: string; build: boolean };
+  /** The branch Dokku deploys; an empty `branch` clears the app's own setting. */
+  "git:set": { app: string; branch: string };
   /** An empty `value` clears the setting. */
   "builder:set": { app: string; property: BuilderProperty; value: string };
   /** `processType` null is the default for every type; an empty `memory` or `cpu` is left as it is. */
@@ -120,6 +131,8 @@ export type Availability = { ok: true } | { ok: false; reason: string };
 export type AppState = Pick<AppSummary, "status" | "revision" | "proxyEnabled"> & {
   /** `ps:report`'s `can-scale`; unknown (omitted) counts as scalable. */
   canScale?: boolean;
+  /** Whether the deploy lock is held; unknown (omitted) counts as free. */
+  locked?: boolean;
 };
 
 type OperationDef<K extends OperationId> = {
@@ -520,6 +533,65 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
       ...thenRebuild(app, rebuild),
     ],
     streams: ({ rebuild }) => rebuild,
+    availability: unlessDeploying(),
+  },
+  "apps:unlock": {
+    parse: appBody("apps:unlock"),
+    commands: ({ app }) => [step("apps:unlock", app)],
+    streams: false,
+    // Not behind `unlessDeploying`: a held lock is exactly what this is for.
+    availability: ({ locked }) =>
+      locked ? available : unavailable("No deploy lock is held."),
+  },
+  "git:from-image": {
+    parse: parseBody((body) => {
+      const image = fields(body).string("image");
+      return isImageRef(image)
+        ? { op: "git:from-image", app: appName(body), image }
+        : refuse(
+            `Invalid image: ${JSON.stringify(image)}. Use registry/path:tag in lowercase, such as nginx:alpine.`,
+          );
+    }),
+    commands: ({ app, image }) => [step("git:from-image", app, image)],
+    streams: true,
+    availability: unlessDeploying(),
+  },
+  "git:sync": {
+    parse: parseBody((body) => {
+      const f = fields(body);
+      const url = f.string("url");
+      const ref = f.optionalString("ref") ?? "";
+      if (!isGitUrl(url)) {
+        return refuse(
+          "Use an https:// URL or git@host:path, with no credentials, query or local path.",
+        );
+      }
+      if (ref !== "" && !isGitRef(ref)) {
+        return refuse(
+          "A branch, tag or commit: letters, digits, dots, underscores, hyphens and slashes, not starting with a hyphen.",
+        );
+      }
+      return { op: "git:sync", app: appName(body), url, ref, build: f.flag("build") };
+    }),
+    commands: ({ app, url, ref, build }) => [
+      step("git:sync", ...(build ? ["--build"] : []), app, url, ...(ref ? [ref] : [])),
+    ],
+    streams: true,
+    availability: unlessDeploying(),
+  },
+  "git:set": {
+    parse: parseBody((body) => {
+      const branch = fields(body).string("branch");
+      return branch === "" || isGitRef(branch)
+        ? { op: "git:set", app: appName(body), branch }
+        : refuse(
+            "A branch name: letters, digits, dots, underscores, hyphens and slashes, not starting with a hyphen.",
+          );
+    }),
+    commands: ({ app, branch }) => [
+      step("git:set", app, "deploy-branch", ...(branch === "" ? [] : [branch])),
+    ],
+    streams: false,
     availability: unlessDeploying(),
   },
   "builder:set": {

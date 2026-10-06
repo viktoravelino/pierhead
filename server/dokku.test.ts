@@ -137,3 +137,42 @@ describe("buildStep: settings steps", () => {
     }
   });
 });
+
+describe("buildStep: deploys", () => {
+  const url = "https://github.com/crccheck/docker-hello-world";
+
+  test("git:from-image, git:sync and git:set pass checked arguments through", () => {
+    expect(buildStep(["git:from-image", "hello", "nginx:alpine"])).toEqual({
+      ok: true,
+      argv: ["git:from-image", "hello", "nginx:alpine"],
+    });
+    expect(buildStep(["git:sync", "--build", "hello", url, "master"])).toEqual({
+      ok: true,
+      argv: ["git:sync", "--build", "hello", url, "master"],
+    });
+    expect(buildStep(["git:sync", "hello", "git@github.com:o/r.git"]).ok).toBe(true);
+    expect(buildStep(["git:set", "hello", "deploy-branch", "main"]).ok).toBe(true);
+    expect(buildStep(["git:set", "hello", "deploy-branch"]).ok).toBe(true);
+  });
+
+  test("anything outside the grammar or the fixed flags is refused", () => {
+    for (const argv of [
+      ["git:from-image", "hello", "-x"],
+      ["git:from-image", "hello", "nginx:alpine; rm"],
+      ["git:from-image", "hello", "nginx", "me", "me@example.com"],
+      ["git:sync", "hello", "file:///tmp"],
+      ["git:sync", "hello", "/tmp/x"],
+      ["git:sync", "--build-if-changes", "hello", url],
+      ["git:sync", "--skip-deploy-branch", "hello", url],
+      ["git:sync", "hello", url, "-x"],
+      ["git:sync", "hello", url, "main", "extra"],
+      ["git:sync", "-h", url],
+      ["git:set", "hello", "keep-git-dir", "true"],
+      ["git:set", "hello", "deploy-branch", "-x"],
+      ["git:set", "hello", "deploy-branch", "a", "b"],
+      ["git:set", "--global", "deploy-branch", "main"],
+    ]) {
+      expect(buildStep(argv).ok).toBe(false);
+    }
+  });
+});

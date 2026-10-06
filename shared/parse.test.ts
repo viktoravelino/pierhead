@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import builderDockerfileSet from "./fixtures/builder-dockerfile-report-set.json";
 import builderSet from "./fixtures/builder-report-set.json";
+import buildsList from "./fixtures/builds-list.json";
 import dockerOptions from "./fixtures/docker-options-report.json";
 import hostGlobal from "./fixtures/host-global-reports.json";
 import logs from "./fixtures/logs.json";
@@ -20,8 +21,10 @@ import {
   parseAppSummary,
   parseAttachments,
   parseBuilderSettings,
+  parseBuilds,
   parseDokkuHost,
   parseFormation,
+  parseGitSettings,
   parseLogEvent,
   parseNetworkList,
   parseNetworks,
@@ -38,7 +41,15 @@ const fixtureText = (name: string) =>
 const detailOf = (
   name: string,
   reports: Parameters<typeof parseAppDetail>[1] extends infer R
-    ? Omit<R, "resource" | "builderDockerfile" | "scale" | "storage" | "dockerOptions">
+    ? Omit<
+        R,
+        | "resource"
+        | "builderDockerfile"
+        | "scale"
+        | "storage"
+        | "dockerOptions"
+        | "locked"
+      >
     : never,
   more: Partial<Parameters<typeof parseAppDetail>[1]> = {},
 ) =>
@@ -48,6 +59,7 @@ const detailOf = (
     scale: '[{"process_type":"web","quantity":1}]',
     storage: "[]",
     dockerOptions: '{"deploy-list":[]}',
+    locked: false,
     ...reports,
     ...more,
   });
@@ -468,5 +480,139 @@ describe("settings reads", () => {
       detailOf("hello", { ...running, ps: { ...running.ps, "can-scale": "false" } })
         .canScale,
     ).toBe(false);
+  });
+});
+
+describe("builds:list", () => {
+  const records = parseBuilds(JSON.stringify(buildsList));
+
+  test("reads every record of the real capture, newest first", () => {
+    expect(records).toHaveLength(buildsList.length);
+    // The first is a `git:sync --build` of a missing ref, captured from pr3-fail.
+    expect(records[0]?.status).toBe("abandoned");
+    expect(records[1]).toEqual({
+      id: "muwan7kowt3m3s",
+      kind: "build",
+      source: "ps:rebuild",
+      status: "succeeded",
+      startedAt: "2026-10-06T06:24:36.910427822Z",
+      finishedAt: "2026-10-06T06:25:02.182Z",
+      exitCode: 0,
+    });
+    expect(records.at(-1)?.source).toBe("git:from-image");
+  });
+
+  test("keeps failures with their negative exit code, and both kinds", () => {
+    const failed = records.find((r) => r.status === "failed");
+    expect(failed).toMatchObject({ kind: "deploy", source: "ps:restart", exitCode: -1 });
+    expect(new Set(records.map((r) => r.kind))).toEqual(new Set(["build", "deploy"]));
+  });
+
+  test("a running record, as Dokku prints it mid-build, has no end and no exit code", () => {
+    const running = JSON.stringify([
+      {
+        id: "muwb3gxtjejsh3",
+        app: "pr3-app",
+        kind: "build",
+        pid: 4813,
+        started_at: "2026-10-06T06:37:15.543610715Z",
+        status: "running",
+        source: "git:sync",
+        display_status: "running",
+        duration: "6s",
+        log_path: "/var/lib/dokku/data/builds/pr3-app/muwb3gxtjejsh3.log",
+      },
+    ]);
+    expect(parseBuilds(running)).toEqual([
+      {
+        id: "muwb3gxtjejsh3",
+        kind: "build",
+        source: "git:sync",
+        status: "running",
+        startedAt: "2026-10-06T06:37:15.543610715Z",
+        finishedAt: null,
+        exitCode: null,
+      },
+    ]);
+  });
+
+  test("a build that died keeps status running for good; display_status says abandoned", () => {
+    const [record] = parseBuilds(
+      JSON.stringify([
+        {
+          id: "muwbrreqv4ru9v",
+          app: "pr3-fail",
+          kind: "build",
+          pid: 689805,
+          started_at: "2026-10-06T06:56:08.855146395Z",
+          status: "running",
+          source: "git:sync",
+          display_status: "abandoned",
+          duration: "1s",
+        },
+      ]),
+    );
+    expect(record).toMatchObject({
+      status: "abandoned",
+      finishedAt: null,
+      exitCode: null,
+    });
+    expect(parseBuilds(JSON.stringify(buildsList)).map((r) => r.status)).toContain(
+      "abandoned",
+    );
+  });
+
+  test("an app without records prints nothing, and an unknown status or kind is tolerated", () => {
+    expect(parseBuilds("")).toEqual([]);
+    expect(parseBuilds("[]")).toEqual([]);
+    const odd = JSON.stringify([
+      {
+        id: "a",
+        kind: "build",
+        source: "x",
+        status: "weird",
+        started_at: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: "b",
+        kind: "mystery",
+        source: "x",
+        status: "failed",
+        started_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    expect(parseBuilds(odd)).toEqual([
+      {
+        id: "a",
+        kind: "build",
+        source: "x",
+        status: "other",
+        startedAt: "2026-01-01T00:00:00Z",
+        finishedAt: null,
+        exitCode: null,
+      },
+    ]);
+  });
+
+  test("throws on output that is not a list of records", () => {
+    expect(() => parseBuilds("{}")).toThrow();
+    expect(() => parseBuilds('[{"kind":"build"}]')).toThrow();
+  });
+});
+
+describe("git:report settings", () => {
+  test("separates the app's own branch from the computed one, and reads the image", () => {
+    expect(
+      parseGitSettings({
+        "deploy-branch": "",
+        "computed-deploy-branch": "master",
+        "source-image": "nginx:alpine",
+      }),
+    ).toEqual({
+      deployBranch: null,
+      computedDeployBranch: "master",
+      sourceImage: "nginx:alpine",
+    });
+    expect(parseGitSettings({ "deploy-branch": "main" }).deployBranch).toBe("main");
   });
 });

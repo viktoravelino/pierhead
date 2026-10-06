@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
-import { hc } from "hono/client";
+import { hc, type InferResponseType } from "hono/client";
 import type { AppType } from "../../server/index";
 import type { OperationOutputEvent, OperationRequest } from "../../shared/operations";
 import type { LogEndEvent, LogEvent } from "../../shared/types";
@@ -96,6 +96,36 @@ export async function fetchApp(name: string) {
   const body = await res.json();
   if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
   return body.app;
+}
+
+/** The app's Dokku build and deploy records, newest first. */
+export async function fetchBuilds(name: string) {
+  const res = await backend.api.apps[":name"].builds.$get({ param: { name } });
+  const body = await res.json();
+  if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
+  return body.builds;
+}
+
+/** The newest lines of one record's log, and whether older ones were cut. */
+export async function fetchBuildOutput(name: string, id: string) {
+  const res = await backend.api.apps[":name"].builds[":id"].output.$get({
+    param: { name, id },
+  });
+  const body = await res.json();
+  if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
+  return { lines: body.lines, truncated: body.truncated };
+}
+
+/** Newest-first activity, for one app when `app` is given, at most `limit` rows. */
+export async function fetchActivity(app?: string, limit?: number) {
+  // Not `backend.api.activity.$get`: the route reads its query by hand, so the client types none.
+  const query = new URLSearchParams();
+  if (app !== undefined) query.set("app", app);
+  if (limit !== undefined) query.set("limit", String(limit));
+  const res = await jsonOrUnreachable(`/api/activity?${query}`);
+  const body: InferResponseType<typeof backend.api.activity.$get> = await res.json();
+  if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
+  return body.activity;
 }
 
 export async function fetchDokku() {

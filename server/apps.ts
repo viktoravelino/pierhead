@@ -4,6 +4,7 @@ import {
   parseAliases,
   parseAppDetail,
   parseAppSummary,
+  parseBuilds,
   parseDomains,
   parseFormation,
   parseNetworkList,
@@ -11,7 +12,13 @@ import {
   parseStorage,
   type Report,
 } from "../shared/parse";
-import type { AppDetail, AppSummary, Network, StorageMount } from "../shared/types";
+import type {
+  AppDetail,
+  AppSummary,
+  BuildRecord,
+  Network,
+  StorageMount,
+} from "../shared/types";
 import type { Dokku, DokkuError, DokkuResult, DokkuRun } from "./dokku";
 
 export type Outcome<T> = { ok: true; value: T } | { ok: false; error: DokkuError };
@@ -147,6 +154,12 @@ export const listStorageUsers = (dokku: DokkuRun) =>
     );
   });
 
+/** One app's build and deploy records from Dokku's `builds` plugin (`builds:list`), newest first. */
+export const getBuilds = (dokku: DokkuRun, name: string) =>
+  outcome<BuildRecord[]>(async () =>
+    parseBuilds(stdoutOf(await dokku("builds:list", name))),
+  );
+
 /**
  * Which app serves each domain: `apps:list` and the all-apps `domains:report`, two SSH
  * calls in parallel, zipped by position like `listApps`.
@@ -197,11 +210,21 @@ function softRead(
   return fallback;
 }
 
+/** Dokku's `apps:locked` text for an app with no deploy lock (it exits 1 then). */
+export const noLock = "Deploy lock does not exist";
+
+/** Whether the deploy lock is held: `apps:locked` exits 0 then. Any other failure is noted in `failed`. */
+function isLocked(result: DokkuResult, failed: string[]) {
+  if (result.ok) return true;
+  if (!result.error.message.includes(noLock)) failed.push("deploy lock");
+  return false;
+}
+
 /**
- * One app's full detail: twelve reads in parallel over the shared connection (the runner
+ * One app's full detail: thirteen reads in parallel over the shared connection (the runner
  * queues them under sshd's session limit), then `GIT_REV` when the git report has no sha.
- * The first seven are required; the five settings reads (formation, storage, aliases,
- * resources, Dockerfile path) may fail alone, which the detail's `partial` names.
+ * The first seven are required; the six settings reads (formation, storage, aliases,
+ * resources, Dockerfile path, deploy lock) may fail alone, which the detail's `partial` names.
  */
 export async function getApp(dokku: DokkuRun, name: string): Promise<Outcome<AppDetail>> {
   const result = await outcome<AppDetail>(async () => {
@@ -218,6 +241,7 @@ export async function getApp(dokku: DokkuRun, name: string): Promise<Outcome<App
       scale,
       storage,
       dockerOptions,
+      lock,
     ] = await Promise.all([
       dokku("ps:report", name),
       dokku("domains:report", name),
@@ -231,6 +255,7 @@ export async function getApp(dokku: DokkuRun, name: string): Promise<Outcome<App
       dokku("ps:scale", name),
       dokku("storage:list", name),
       dokku("docker-options:report", name),
+      dokku("apps:locked", name),
     ]);
     const gitReport = parseReport(stdoutOf(git));
     const failed: string[] = [];
@@ -255,6 +280,7 @@ export async function getApp(dokku: DokkuRun, name: string): Promise<Outcome<App
         parseAliases,
         failed,
       ),
+      locked: isLocked(lock, failed),
       gitRev: await gitRevOf(dokku, name, gitReport),
     });
     return failed.length > 0 ? { ...detail, partial: failed } : detail;

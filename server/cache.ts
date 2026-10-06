@@ -4,6 +4,13 @@ export const defaultCacheTtlMs = 5_000;
 /** Lifetime of the host page's Dokku read: plugins, keys and global settings rarely change. */
 export const hostCacheTtlMs = 60_000;
 
+/**
+ * Lifetime of an app's build records (`builds:list`). Longer than the app reads because
+ * only a deploy changes them, which every pierhead operation invalidates; a `git push` or
+ * CLI deploy shows up within this window.
+ */
+export const buildsCacheTtlMs = 60_000;
+
 /** Reads `PIERHEAD_CACHE_TTL_MS`: milliseconds, `0` turns the cache off. Throws on garbage. */
 export function loadCacheTtl(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.PIERHEAD_CACHE_TTL_MS?.trim();
@@ -71,11 +78,13 @@ export const cacheKeys = {
   host: "host",
   app: (name: string) => `app:${name}`,
   config: (name: string) => `config:${name}`,
+  builds: (name: string) => `builds:${name}`,
 };
 
 /**
  * Drops what a change to `name` can alter: its detail, its config names, the list and the
- * networks (which are derived from every app's report).
+ * networks (which are derived from every app's report). Build records live in their own,
+ * longer cache (`buildsCacheTtlMs`) that the server drops alongside.
  */
 export function invalidateApp(cache: ReadCache, name: string) {
   cache.invalidate(
