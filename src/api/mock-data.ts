@@ -11,6 +11,8 @@ import type {
   HostDetails,
   Network,
   Plugin,
+  Service,
+  ServiceGroup,
 } from "../../shared/types";
 
 const minute = 60_000;
@@ -512,3 +514,60 @@ export const rawLogLine = (profile: LogProfile, process: string, at: Date) => {
             : "Received SIGTERM, shutting down gracefully";
   return `${at.toISOString()} app[${process}]: ${message}`;
 };
+
+const mockService = (
+  type: string,
+  name: string,
+  version: string,
+  apps: string[],
+  patch: Partial<Service> = {},
+): Service => ({
+  type,
+  name,
+  status: "running",
+  version,
+  image: version.split(":")[0] ?? version,
+  imageVersion: version.split(":")[1] ?? "",
+  apps,
+  exposedPorts: [],
+  dataDir: `/var/lib/dokku/services/${type}/${name}/data`,
+  configDir: `/var/lib/dokku/services/${type}/${name}/config`,
+  containerId: "06bce7bea0b0e78681a64cebd0e5be967a60b32c999d34ca5f8eaf6385f00de6",
+  internalIp: "172.18.0.4",
+  maskedDsn: `${type}://${type === "postgres" ? "postgres" : ""}:********@dokku-${type}-${name}:${type === "postgres" ? "5432" : "6379"}${type === "postgres" ? `/${name.replaceAll("-", "_")}` : ""}`,
+  maskedExposedDsn: null,
+  backupSchedule: null,
+  ...patch,
+});
+
+export const serviceGroups: ServiceGroup[] = [
+  {
+    type: "postgres",
+    pluginVersion: "2.2.0",
+    services: [
+      mockService("postgres", "insta-down-db", "timescale/timescaledb:2.30.1-pg18", [
+        "insta-down-api",
+      ]),
+      mockService("postgres", "scratch-db", "timescale/timescaledb:2.30.1-pg18", [], {
+        status: "stopped",
+        containerId: null,
+        internalIp: null,
+      }),
+    ],
+  },
+  {
+    type: "redis",
+    pluginVersion: "2.2.0",
+    services: [
+      mockService("redis", "insta-down-cache", "redis:8.10.1", ["insta-down-api"]),
+    ],
+  },
+];
+
+/** What a mock "Reveal connection string" shows. */
+export const mockDsn = (type: string, name: string) =>
+  `${type}://${type === "postgres" ? "postgres" : ""}:mock-password@dokku-${type}-${name}:${type === "postgres" ? "5432" : "6379"}`;
+
+/** Lines a mock service log shows. */
+export const mockServiceLog = (type: string, name: string, at: Date) =>
+  `${at.toISOString().replace("T", " ").slice(0, 23)} UTC [1] LOG:  ${type} ${name}: checkpoint complete`;

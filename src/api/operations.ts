@@ -3,7 +3,7 @@ import {
   type OperationRequest,
   operationAvailability,
 } from "../../shared/operations";
-import type { AppSummary } from "../../shared/types";
+import type { AppSummary, ServiceGroup } from "../../shared/types";
 
 // The operations table, its Dokku commands and availability rules live in
 // shared/operations.ts (the server runs them); this adds the wording the UI shows around them.
@@ -336,7 +336,73 @@ export const operationUi = {
       "Removes the mount from the app. The directory and its data stay on the host. Applies on the next restart or deploy.",
     tone: "danger",
   },
+  "service:create": {
+    label: "Create service",
+    title: "Create a service",
+    pending: "Creating...",
+    done: "Created the service {target}.",
+    effect:
+      "Starts a new datastore container with its own data directory on the host. The first service of a type pulls its image, which can take a minute or more. Nothing is linked to it yet. Its data is not part of the lab's nightly backup: export it, or schedule a backup, yourself.",
+    tone: "neutral",
+  },
+  "service:destroy": {
+    label: "Destroy service",
+    title: "Destroy {target}?",
+    pending: "Destroying...",
+    done: "Destroyed the service {target}.",
+    effect:
+      "Deletes the service's container and all of its data. This cannot be undone, and the lab backup does not hold it unless it was set up separately. Dokku refuses while an app is still linked.",
+    tone: "danger",
+  },
+  "service:link": {
+    label: "Link",
+    title: "Link {target} to an app",
+    pending: "Linking...",
+    done: "Linked {target}.",
+    effect:
+      "Sets the service's connection string on the app as a config var (DATABASE_URL for postgres, REDIS_URL for redis; DOKKU_<TYPE>_<COLOR>_URL when that name is already taken) and adds a docker link to the service's container. A running app is restarted (about 25 s) to pick it up, unless you opt out.",
+    tone: "neutral",
+  },
+  "service:unlink": {
+    label: "Unlink",
+    title: "Unlink {target} from an app?",
+    pending: "Unlinking...",
+    done: "Unlinked {target}.",
+    effect:
+      "Removes the service's connection string from the app's config and drops the docker link. The service and its data stay. A running app is restarted (about 25 s) unless you opt out; until then its containers keep the old variable.",
+    tone: "danger",
+  },
+  "service:start": {
+    label: "Start",
+    title: "Start {target}?",
+    pending: "Starting...",
+    done: "Started {target}.",
+    effect:
+      "Starts the stopped service container with its data. Linked apps reconnect on their own.",
+    tone: "neutral",
+  },
+  "service:stop": {
+    label: "Stop",
+    title: "Stop {target}?",
+    pending: "Stopping...",
+    done: "Stopped {target}.",
+    effect:
+      "Stops the service container; the data stays. Apps linked to it lose their datastore until it is started again.",
+    tone: "danger",
+  },
+  "service:restart": {
+    label: "Restart",
+    title: "Restart {target}?",
+    pending: "Restarting...",
+    done: "Restarted {target}.",
+    effect:
+      "Stops and starts the service container. Linked apps lose their connection for a moment.",
+    tone: "danger",
+  },
 } as const satisfies Record<OperationId, OperationUi>;
+
+/** The wording of a service export, which is recorded in the activity log but is not an operation. */
+export const exportUi = { label: "Export", done: "Exported {target}." } as const;
 
 /** The per-app buttons and palette entries, in the order the UI lists them. */
 export const psOperationIds = [
@@ -354,8 +420,18 @@ export const forTarget = (wording: string, target: string) =>
  * Problems the host's other apps cause, which only the loaded list can tell (the server
  * checks them again). `null` when there is none.
  */
-export function conflictProblem(req: OperationRequest, apps: readonly AppSummary[]) {
+export function conflictProblem(
+  req: OperationRequest,
+  apps: readonly AppSummary[],
+  services: readonly ServiceGroup[],
+) {
   switch (req.op) {
+    case "service:create":
+      return services.some(
+        (g) => g.type === req.type && g.services.some((s) => s.name === req.name),
+      )
+        ? `A ${req.type} service named ${req.name} already exists.`
+        : null;
     case "apps:create":
       return apps.some((a) => a.name === req.app)
         ? `An app named ${req.app} already exists.`

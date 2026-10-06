@@ -83,6 +83,28 @@ export async function fetchStorageUsers() {
   return body.apps;
 }
 
+/** Every installed service plugin with its services; no connection string in it. */
+export async function fetchServices() {
+  const res = await backend.api.services.$get();
+  const body = await res.json();
+  if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
+  return body.groups;
+}
+
+/** A service's connection string, with its password; only called when the user asks to reveal it. */
+export async function fetchServiceDsn(type: string, name: string) {
+  const res = await backend.api.services[":type"][":name"].dsn.$get({
+    param: { type, name },
+  });
+  const body = await res.json();
+  if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
+  return body.dsn;
+}
+
+/** Where the browser downloads a service's dump from. */
+export const serviceExportUrl = (type: string, name: string) =>
+  `/api/services/${encoded(type)}/${encoded(name)}/export`;
+
 export async function fetchHostDetails() {
   const res = await backend.api.host.$get();
   const body = await res.json();
@@ -139,16 +161,13 @@ export async function fetchDokku() {
 const logTail = 500;
 
 /**
- * Follows an app's logs over SSE (`GET /api/apps/:name/logs`). Any end of the stream,
- * clean or not, calls `onEnd` once and closes the connection: an `EventSource` would
- * otherwise reconnect by itself and replay the history. Returns an unsubscribe, which
- * closes the connection; the server then kills its ssh child.
+ * Follows a log stream over SSE. Any end of the stream, clean or not, calls `onEnd` once
+ * and closes the connection: an `EventSource` would otherwise reconnect by itself and
+ * replay the history. Returns an unsubscribe, which closes the connection; the server then
+ * kills its ssh child.
  */
-export function streamLogs(name: string, { onLines, onEnd }: LogHandlers) {
-  // Not `backend.….$url()`: that needs an absolute base, and ours is relative (proxied).
-  const source = new EventSource(
-    `/api/apps/${encodeURIComponent(name)}/logs?tail=${logTail}`,
-  );
+function followLogs(url: string, { onLines, onEnd }: LogHandlers) {
+  const source = new EventSource(url);
   const finish = (end: LogEndEvent) => {
     source.close();
     onEnd(end);
@@ -169,6 +188,20 @@ export function streamLogs(name: string, { onLines, onEnd }: LogHandlers) {
     finish({ kind: "failed", message: "Lost the connection to the log stream." });
   return () => source.close();
 }
+
+// Not `backend.….$url()`: that needs an absolute base, and ours is relative (proxied).
+const encoded = encodeURIComponent;
+
+/** Follows an app's logs (`GET /api/apps/:name/logs`). */
+export const streamLogs = (name: string, handlers: LogHandlers) =>
+  followLogs(`/api/apps/${encoded(name)}/logs?tail=${logTail}`, handlers);
+
+/** Follows a service's logs (`GET /api/services/:type/:name/logs`). */
+export const streamServiceLogs = (type: string, name: string, handlers: LogHandlers) =>
+  followLogs(
+    `/api/services/${encoded(type)}/${encoded(name)}/logs?tail=${logTail}`,
+    handlers,
+  );
 
 /** What the operations route answers with, bar the event stream. */
 type OperationBody = { ok: true; output: string } | { ok: false; error: ApiErrorBody };

@@ -37,6 +37,7 @@ import {
   hostDetailsQuery,
   hostQuery,
   networksQuery,
+  servicesQuery,
   storageUsersQuery,
 } from "../api/queries";
 import {
@@ -120,6 +121,8 @@ const hasEmptyField = (value: unknown): boolean =>
       : typeof value === "object" && value !== null
         ? Object.values(value).some(hasEmptyField)
         : false;
+
+type ServiceLinkOp = "service:link" | "service:unlink";
 
 type Opened = { id: number; request: OperationRequest; note?: string };
 let nextOpened = 0;
@@ -231,6 +234,7 @@ export function OperationHost({ children }: { children: ReactNode }) {
       if (dataSource === "mock") return;
       void queryClient.invalidateQueries({ queryKey: appsQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: networksQuery.queryKey });
+      void queryClient.invalidateQueries({ queryKey: servicesQuery.queryKey });
       // The global settings change what the Host page and every app show.
       void queryClient.invalidateQueries({ queryKey: hostQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: hostDetailsQuery.queryKey });
@@ -402,12 +406,13 @@ function OperationForm({
   // A form that opens blank does not complain until it is edited.
   const [touched, setTouched] = useState(false);
   const { data: apps = [] } = useQuery(appsQuery);
+  const { data: groups = [] } = useQuery(servicesQuery);
   const ui = operationUi[current.op];
 
   // The same parse the server runs, so the form and the route cannot disagree.
   const parsed = parseOperation(current.op, current);
   const valid = typeof parsed === "string" ? null : parsed;
-  const conflict = valid ? conflictProblem(valid, apps) : null;
+  const conflict = valid ? conflictProblem(valid, apps, groups) : null;
   const typedName = destructiveConfirm(current);
   const unconfirmed = typedName !== undefined && typedName.typed !== typedName.expected;
   const unchanged = valid ? unchangedProblem(initial, valid) : null;
@@ -873,6 +878,29 @@ function Fields({
           onChange={(confirm) => onChange({ ...request, confirm })}
         />
       );
+    case "service:create":
+      return <CreateServiceFields request={request} onChange={onChange} />;
+    case "service:destroy":
+      return (
+        <TextField
+          label={`Type ${request.name} to confirm`}
+          value={request.confirm}
+          placeholder={request.name}
+          onChange={(confirm) => onChange({ ...request, confirm })}
+        />
+      );
+    case "service:link":
+    case "service:unlink":
+      return (
+        <LinkFields
+          request={request}
+          initial={initial}
+          onChange={(next) => onChange(next)}
+        />
+      );
+    case "service:start":
+    case "service:stop":
+    case "service:restart":
     case "ps:start":
     case "ps:stop":
     case "ps:restart":
@@ -884,6 +912,117 @@ function Fields({
     case "apps:unlock":
       return null;
   }
+}
+
+/** The type, name and optional image version of a new service. */
+function CreateServiceFields({
+  request,
+  onChange,
+}: {
+  request: Extract<OperationRequest, { op: "service:create" }>;
+  onChange: (request: OperationRequest) => void;
+}) {
+  const { data: groups = [] } = useQuery(servicesQuery);
+  // A type in the request that is not installed stays selectable, so the server's refusal shows.
+  const types = [...new Set([...groups.map((g) => g.type), request.type])].filter(
+    Boolean,
+  );
+  return (
+    <>
+      <SelectField
+        label="Type"
+        value={request.type}
+        focus={false}
+        options={types.map((type) => ({ value: type, label: type }))}
+        onChange={(type) => onChange({ ...request, type })}
+      />
+      <TextField
+        label="Name"
+        value={request.name}
+        placeholder="my-app-db"
+        hint="Lowercase letters, digits and hyphens, starting with a letter."
+        onChange={(name) => onChange({ ...request, name })}
+      />
+      <TextField
+        label="Image version (optional)"
+        value={request.version}
+        placeholder="the plugin's default"
+        focus={false}
+        hint="An image tag such as 16-alpine; the plugin's own image is used. Leave empty for its default."
+        onChange={(version) => onChange({ ...request, version })}
+      />
+    </>
+  );
+}
+
+/**
+ * What a link or unlink needs besides the service: the app when the dialog opened without
+ * one (from the Services page), or the service when it opened from an app, and whether to
+ * restart the app.
+ */
+function LinkFields({
+  request,
+  initial,
+  onChange,
+}: {
+  request: Extract<OperationRequest, { op: "service:link" | "service:unlink" }>;
+  initial: OperationRequest;
+  onChange: (request: Extract<OperationRequest, { op: ServiceLinkOp }>) => void;
+}) {
+  const { data: apps = [] } = useQuery(appsQuery);
+  const { data: groups = [] } = useQuery(servicesQuery);
+  const linking = request.op === "service:link";
+  const open = initial.op === request.op ? initial : request;
+  const services = groups.flatMap((g) => g.services);
+  const current = services.find(
+    (s) => s.type === request.type && s.name === request.name,
+  );
+  const linkedTo = (service: { apps: string[] }, app: string) =>
+    service.apps.includes(app);
+  return (
+    <>
+      {open.app === "" && (
+        <SelectField
+          label="App"
+          value={request.app}
+          options={[
+            { value: "", label: "Choose an app..." },
+            ...apps
+              .filter((a) => !current || linkedTo(current, a.name) !== linking)
+              .map((a) => ({ value: a.name, label: a.name })),
+          ]}
+          onChange={(app) => onChange({ ...request, app })}
+        />
+      )}
+      {open.name === "" && (
+        <SelectField
+          label="Service"
+          value={request.name === "" ? "" : `${request.type}:${request.name}`}
+          options={[
+            { value: "", label: "Choose a service..." },
+            ...services
+              .filter((s) => request.app === "" || linkedTo(s, request.app) !== linking)
+              .map((s) => ({
+                value: `${s.type}:${s.name}`,
+                label: `${s.name} (${s.type})`,
+              })),
+          ]}
+          onChange={(value) => {
+            const [type = "", name = ""] = value.split(":");
+            onChange({ ...request, type, name });
+          }}
+        />
+      )}
+      <Checkbox
+        checked={request.restart}
+        onChange={(restart) => onChange({ ...request, restart })}
+      >
+        {linking
+          ? "Restart the app so it picks up the new variable. Without it the variable is set, but running containers keep their old environment until the next restart or deploy."
+          : "Restart the app so it drops the old variable. Without it the variable is removed from the config, but running containers keep it until the next restart or deploy."}
+      </Checkbox>
+    </>
+  );
 }
 
 /** Rows of one text input each, with remove buttons and an "Add another". */
