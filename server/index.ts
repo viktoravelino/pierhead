@@ -23,7 +23,7 @@ import {
 } from "../shared/operations";
 import { parseDokkuVersion, parseLogEvent } from "../shared/parse";
 import type { LogEndEvent, PierheadConfig } from "../shared/types";
-import { getApp, isNotFound, listApps, listNetworks } from "./apps";
+import { getApp, isNotFound, listApps, listNetworks, listStorageUsers } from "./apps";
 import {
   cacheKeys,
   createReadCache,
@@ -37,6 +37,7 @@ import { readDokkuHost } from "./host";
 import { createHostMetrics, loadGlancesUrl } from "./metrics";
 import {
   afterSuccess,
+  failureRefusal,
   preflight,
   proxyRestore,
   restoreToSave,
@@ -171,6 +172,16 @@ const app = new Hono()
     );
     if (!result.ok) return c.json(result, 502);
     return c.json({ ok: true, networks: result.value } as const);
+  })
+  // Every app's storage mounts, for the mount dialog's "already used by" warning.
+  .get("/api/storage", async (c) => {
+    const result = await readCache.get(
+      cacheKeys.storage,
+      () => listStorageUsers(dokku),
+      (r) => r.ok,
+    );
+    if (!result.ok) return c.json(result, 502);
+    return c.json({ ok: true, apps: result.value } as const);
   })
   .get("/api/apps", async (c) => {
     const result = await readCache.get(
@@ -412,6 +423,11 @@ const app = new Hono()
       const result = await runSteps(dokku, steps);
       invalidateFor(req);
       if (!result.ok) {
+        const known = failureRefusal(req, result.error);
+        if (known) {
+          logOperation(op, target, `refused (${known.kind})`, startedAt);
+          return c.json(invalid(known.kind, known.message), known.status);
+        }
         logOperation(op, target, `failed (${result.error.kind})`, startedAt);
         return c.json({ ok: false, error: result.error } as const, 502);
       }

@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
+import { useEffect } from "react";
 import { maxProcessCount } from "../../shared/grammar";
 import { operationAvailability } from "../../shared/operations";
 import type { FormationEntry } from "../../shared/types";
-import { appsQuery, networksQuery } from "../api/queries";
+import { appsQuery, networksQuery, storageUsersQuery } from "../api/queries";
 
 // The inputs the operation dialog is built from.
 
@@ -108,8 +109,9 @@ export function Checkbox({
 }
 
 /**
- * Process types with a count each. The rows the dialog opened with (`locked`) keep their
- * type; rows added here take any lowercase type, which Dokku starts whatever the image runs.
+ * Process types with a count each. The first `locked` rows are the ones the dialog opened
+ * with: they keep their type and cannot be removed, so the rows after them are always the
+ * ones added here, which take any lowercase type (Dokku starts whatever the image runs).
  */
 export function FormationList({
   formation,
@@ -154,9 +156,9 @@ export function FormationList({
           />
           <button
             type="button"
-            aria-label={`Leave out row ${i + 1}`}
-            title="Leave this type out of the command"
-            disabled={formation.length === 1}
+            aria-label={`Remove row ${i + 1}`}
+            title={i < locked ? "This type is already in the formation" : undefined}
+            disabled={i < locked}
             onClick={() => onChange(formation.filter((_, j) => j !== i))}
             className={rowButton}
           >
@@ -251,13 +253,13 @@ export function RebuildToggle({
   const availability = summary
     ? operationAvailability("ps:rebuild", summary)
     : ({ ok: false, reason: "Loading the app..." } as const);
+  // A rebuild that became unavailable must not stay requested behind the disabled box.
+  useEffect(() => {
+    if (!availability.ok && checked) onChange(false);
+  }, [availability.ok, checked, onChange]);
   return (
     <div className="flex flex-col gap-1">
-      <Checkbox
-        checked={checked && availability.ok}
-        disabled={!availability.ok}
-        onChange={onChange}
-      >
+      <Checkbox checked={checked} disabled={!availability.ok} onChange={onChange}>
         Rebuild now to apply it
       </Checkbox>
       <p className="pl-6.5 text-xs text-faint">
@@ -266,5 +268,20 @@ export function RebuildToggle({
           : `Not available: ${availability.reason}`}
       </p>
     </div>
+  );
+}
+
+/** Warns when another app already mounts the directory, since they would share its data. */
+export function SharedStorageWarning({ app, name }: { app: string; name: string }) {
+  const { data } = useQuery(storageUsersQuery);
+  const others = (data ?? [])
+    .filter((a) => a.app !== app && a.mounts.some((m) => m.name === name))
+    .map((a) => a.app);
+  if (others.length === 0) return null;
+  return (
+    <p role="status" className="text-pretty text-sm text-warn">
+      <span className="font-mono">{name}</span> is already mounted by {others.join(", ")}.
+      Mounting it here shares the same files between the apps.
+    </p>
   );
 }

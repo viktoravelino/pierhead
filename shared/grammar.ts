@@ -111,7 +111,15 @@ export const isNetworkAlias = (alias: string) =>
   domainLabel.test(alias) && alias.length <= 63;
 
 /** The builders the builder panel offers; `null` is Dokku's builder that does nothing. */
-export const builderNames = ["dockerfile", "herokuish", "pack", "null"] as const;
+export const builderNames = [
+  "dockerfile",
+  "herokuish",
+  "pack",
+  "nixpacks",
+  "railpack",
+  "lambda",
+  "null",
+] as const;
 
 /**
  * A directory or file inside the repository: `/`-separated segments of letters, digits,
@@ -124,8 +132,21 @@ export const isRepoPath = (path: string) =>
   !path.startsWith("-") &&
   path.split("/").every((segment) => segment !== "." && segment !== "..");
 
-/** `256m`, `1g`, `512` (Dokku reads a bare number as megabytes). */
-export const isMemory = (memory: string) => /^[0-9]{1,9}[bkmg]?$/.test(memory);
+/** Bytes in one unit; Dokku reads a missing unit as megabytes. */
+const bytesPer = (unit: string) =>
+  unit === "b" ? 1 : unit === "k" ? 1024 : unit === "g" ? 1024 ** 3 : 1024 ** 2;
+
+/** Docker refuses a memory limit below 6 MiB. */
+const minMemoryBytes = 6 * 1024 ** 2;
+
+/** `256m`, `1g`, `512` (a bare number is megabytes), at least Docker's 6 MiB minimum. */
+export function isMemory(memory: string) {
+  const [, digits = "", unit = ""] = memory.match(/^([0-9]{1,9})([bkmg]?)$/) ?? [];
+  return digits !== "" && Number(digits) * bytesPer(unit) >= minMemoryBytes;
+}
+
+/** What `--process-type` takes for the settings that apply to every process type. */
+export const defaultProcessType = "_default_";
 
 /** CPUs as Docker takes them: a number with at most two decimals. */
 export const isCpu = (cpu: string) => /^[0-9]{1,3}(\.[0-9]{1,2})?$/.test(cpu);

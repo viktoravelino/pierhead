@@ -32,7 +32,7 @@ import {
   operationUi,
   psOperationIds,
 } from "../api/operations";
-import { appsQuery, networksQuery } from "../api/queries";
+import { appsQuery, networksQuery, storageUsersQuery } from "../api/queries";
 import {
   Checkbox,
   FormationList,
@@ -41,6 +41,7 @@ import {
   RebuildToggle,
   rowButton,
   SelectField,
+  SharedStorageWarning,
   TextField,
 } from "./FormControls";
 import { useToast } from "./Toast";
@@ -90,6 +91,18 @@ function WithTarget({ text, target }: { text: string; target: string }) {
       )}
     </>
   );
+}
+
+/** A request that would change nothing, which only a form that opened with the current values can tell. */
+function unchangedProblem(initial: OperationRequest, request: OperationRequest) {
+  if (initial.op !== "ps:scale" || request.op !== "ps:scale") return null;
+  const same =
+    initial.formation.length === request.formation.length &&
+    initial.formation.every(
+      (e, i) =>
+        e.type === request.formation[i]?.type && e.count === request.formation[i]?.count,
+    );
+  return same ? "The formation is unchanged." : null;
 }
 
 /** Whether any text field in the request is still blank (a form that has not been filled in). */
@@ -181,6 +194,7 @@ export function OperationHost({ children }: { children: ReactNode }) {
       if (dataSource === "mock") return;
       void queryClient.invalidateQueries({ queryKey: appsQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: networksQuery.queryKey });
+      void queryClient.invalidateQueries({ queryKey: storageUsersQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: backendHealthQuery.queryKey });
     },
   });
@@ -322,8 +336,9 @@ function OperationForm({
   const conflict = valid ? conflictProblem(valid, apps) : null;
   const typedName = destructiveConfirm(current);
   const unconfirmed = typedName !== undefined && typedName.typed !== typedName.expected;
-  const problem = typeof parsed === "string" ? parsed : conflict;
-  const ready = valid !== null && conflict === null && !unconfirmed;
+  const unchanged = valid ? unchangedProblem(initial, valid) : null;
+  const problem = typeof parsed === "string" ? parsed : (conflict ?? unchanged);
+  const ready = valid !== null && problem === null && !unconfirmed;
 
   const change = (next: OperationRequest) => {
     setCurrent(next);
@@ -582,7 +597,10 @@ function Fields({
           hint="Empty lets Dokku detect the builder from the repository."
           options={[
             { value: "", label: "Detect automatically" },
-            ...builderNames.map((name) => ({ value: name, label: name })),
+            // A stored value outside the list (set from the CLI) stays selectable.
+            ...[...new Set([...builderNames, request.value])]
+              .filter((name) => name !== "")
+              .map((name) => ({ value: name, label: name })),
           ]}
           onChange={(value) => onChange({ ...request, value })}
         />
@@ -623,9 +641,20 @@ function Fields({
       );
     case "resource:clear":
       return (
-        <p className="text-sm text-dim">
-          {request.kind === "limit" ? "Limit" : "Reservation"} for{" "}
-          <span className="font-mono">{request.processType ?? "all process types"}</span>
+        <p className="text-pretty text-sm text-dim">
+          {request.processType === null ? (
+            <>
+              Clears only the {request.kind === "limit" ? "limit" : "reservation"} that
+              applies to all process types. Settings made for individual process types
+              stay.
+            </>
+          ) : (
+            <>
+              Clears only the {request.kind === "limit" ? "limit" : "reservation"} of{" "}
+              <span className="font-mono">{request.processType}</span>. Other process
+              types and the all-types setting stay.
+            </>
+          )}
         </p>
       );
     case "storage:mount":
@@ -646,6 +675,7 @@ function Fields({
             hint="Absolute, such as /data."
             onChange={(containerPath) => onChange({ ...request, containerPath })}
           />
+          <SharedStorageWarning app={request.app} name={request.name} />
         </>
       );
     case "storage:unmount":

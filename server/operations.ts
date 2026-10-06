@@ -77,6 +77,23 @@ export async function preflight(
 
   const availability = operationAvailability(req.op, app);
   if (!availability.ok) return refused(409, "unavailable", availability.reason);
+  // These compare against settings reads that may have failed; an empty list there is not "none".
+  if (
+    app.partial &&
+    (req.op === "network:alias-add" ||
+      req.op === "network:alias-remove" ||
+      req.op === "storage:mount" ||
+      req.op === "storage:unmount")
+  ) {
+    return {
+      ok: false,
+      refusal: {
+        status: 502,
+        kind: "partial-read",
+        message: `Could not read ${app.partial.join(", ")} for ${req.app}; try again.`,
+      },
+    };
+  }
   // Settings that only apply on the next deploy offer to rebuild; refuse a rebuild that cannot run.
   if ("rebuild" in req && req.rebuild) {
     const rebuild = operationAvailability("ps:rebuild", app);
@@ -168,6 +185,22 @@ export async function preflight(
     case "proxy:disable":
       return { ok: true, app };
   }
+}
+
+/**
+ * Dokku's own failure for a request, as a refusal when it means a state the checks could
+ * not see: Docker keeps a network while a container is on it, and a detached app's
+ * running container stays on the network until it is rebuilt. Null for any other failure.
+ */
+export function failureRefusal(req: OperationRequest, error: DokkuError): Refusal | null {
+  if (req.op === "network:destroy" && error.message.includes("has active endpoints")) {
+    return {
+      status: 409,
+      kind: "in-use",
+      message: `${req.network} still has a running container connected. Containers stay on a network until their app is rebuilt, so rebuild every app that was attached to it, then try again.`,
+    };
+  }
+  return null;
 }
 
 /**

@@ -6,6 +6,7 @@ import hostGlobal from "./fixtures/host-global-reports.json";
 import logs from "./fixtures/logs.json";
 import multiDomain from "./fixtures/multi-domain.json";
 import networkAttached from "./fixtures/network-report-attached.json";
+import networkMulti from "./fixtures/network-report-multi.json";
 import neverDeployed from "./fixtures/never-deployed.json";
 import resourceReport from "./fixtures/resource-report.json";
 import running from "./fixtures/running.json";
@@ -23,6 +24,7 @@ import {
   parseFormation,
   parseLogEvent,
   parseNetworkList,
+  parseNetworks,
   parseReport,
   parseResources,
   parseSshKeys,
@@ -412,6 +414,40 @@ describe("settings reads", () => {
       "attach-post-create": [],
       "attach-post-deploy": [],
     });
+  });
+
+  // Dokku joins several networks with commas: `pr2-probe-net,hello-net`.
+  test("network:report values with several networks split on commas", () => {
+    expect(networkMulti["attach-post-create"]).toBe("pr2-probe-net,hello-net");
+    expect(parseAttachments(networkMulti)).toEqual({
+      "initial-network": ["pr2-probe-net"],
+      "attach-post-create": ["pr2-probe-net", "hello-net"],
+      "attach-post-deploy": [],
+    });
+    expect(parseNetworks(networkMulti).map((n) => n.name)).toEqual([
+      "pr2-probe-net",
+      "hello-net",
+    ]);
+  });
+
+  test("an app on two networks is a member of both, so neither looks unused", () => {
+    const info = (name: string) => ({
+      name,
+      driver: "bridge",
+      scope: "local",
+      dokkuManaged: true,
+      internal: false,
+    });
+    const built = buildNetworks(
+      [info("hello-net"), info("pr2-probe-net"), info("spare-net")],
+      [{ name: "probe", report: networkMulti }],
+    );
+    const members = (n: string) => built.find((b) => b.name === n)?.members;
+    expect(members("hello-net")).toEqual([{ app: "probe", via: ["attach-post-create"] }]);
+    expect(members("pr2-probe-net")).toEqual([
+      { app: "probe", via: ["initial-network", "attach-post-create"] },
+    ]);
+    expect(members("spare-net")).toEqual([]);
   });
 
   test("the detail carries them, and can-scale false is read as false", () => {

@@ -153,7 +153,7 @@ export const operationUi = {
     pending: "Scaling...",
     done: "Scaled {target}.",
     effect:
-      "Sets how many containers run per process type. Dokku redeploys the app to apply it (about 40 s for one more web container) unless you only save the formation.",
+      "Sets how many containers run per process type. Dokku redeploys the app to apply it (about 40 s for one more web container) unless you only save the formation. Scaling a stopped app starts it, and web=0 removes every web container, which leaves the app serving nothing.",
     tone: "neutral",
   },
   "network:create": {
@@ -225,7 +225,7 @@ export const operationUi = {
     pending: "Clearing...",
     done: "Cleared the resources of {target}.",
     effect:
-      "Removes the setting; Docker's default (no limit) applies from the next deploy.",
+      "Removes only the setting named below; Docker's default (no limit) applies to it from the next deploy.",
     tone: "danger",
   },
   "storage:mount": {

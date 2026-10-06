@@ -127,7 +127,7 @@ const valid = {
   },
   "resource:clear": {
     req: { op: "resource:clear", app, kind: "reserve", processType: null },
-    argv: [["resource:reserve-clear", app]],
+    argv: [["resource:reserve-clear", "--process-type", "_default_", app]],
   },
   "storage:mount": {
     req: { op: "storage:mount", app, name: "my-data", containerPath: "/data" },
@@ -272,6 +272,13 @@ describe("operations table", () => {
     expect(
       commandSteps({ op: "resource:clear", app, kind: "limit", processType: "web" }),
     ).toEqual([["resource:limit-clear", "--process-type", "web", app]]);
+    // Without a process type Dokku clears every type's setting, so the default is named.
+    expect(
+      commandSteps({ op: "resource:clear", app, kind: "limit", processType: null }),
+    ).toEqual([["resource:limit-clear", "--process-type", "_default_", app]]);
+    expect(
+      parseOperation("resource:clear", { app, kind: "limit", processType: "_default_" }),
+    ).toEqual({ op: "resource:clear", app, kind: "limit", processType: null });
   });
 
   test("rebuild streams; proxy toggles stream once deployed", () => {
@@ -436,14 +443,23 @@ describe("request validation: settings", () => {
       expect(typeof set("build-dir", value)).toBe("string");
       expect(typeof set("dockerfile-path", value)).toBe("string");
     }
-    for (const value of ["nope", "Dockerfile", "nixpacks"]) {
+    for (const value of ["nope", "Dockerfile", "NixPacks"]) {
       expect(typeof set("selected", value)).toBe("string");
     }
     expect(typeof set("skip-cleanup", "true")).toBe("string");
     for (const value of ["backend", "apps/web.v2", "docker/Dockerfile.prod", ""]) {
       expect(typeof set("build-dir", value)).toBe("object");
     }
-    for (const value of ["dockerfile", "herokuish", "pack", "null", ""]) {
+    for (const value of [
+      "dockerfile",
+      "herokuish",
+      "pack",
+      "nixpacks",
+      "railpack",
+      "lambda",
+      "null",
+      "",
+    ]) {
       expect(typeof set("selected", value)).toBe("object");
     }
   });
@@ -451,7 +467,19 @@ describe("request validation: settings", () => {
   test("resources: Dokku's memory units, plain cpu numbers, at least one value", () => {
     const set = (memory: string, cpu: string, extra: object = {}) =>
       parseOperation("resource:set", { app, kind: "limit", memory, cpu, ...extra });
-    for (const memory of ["lots", "-1", "256 m", "256mb", "1.5g", "m", "256M", "1e3"]) {
+    for (const memory of [
+      "lots",
+      "-1",
+      "256 m",
+      "256mb",
+      "1.5g",
+      "m",
+      "256M",
+      "1e3",
+      "5m",
+      "64k",
+      "0",
+    ]) {
       expect(typeof set(memory, "")).toBe("string");
     }
     for (const cpu of ["-1", "abc", "1.234", ".5", "1,5", "0x1"]) {

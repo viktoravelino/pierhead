@@ -135,6 +135,11 @@ export type AppDetail = AppCommon & {
   resources: ResourceEntry[];
   storage: StorageMount[];
   /**
+   * Settings reads that failed (their fields above are empty, not unset). Absent when
+   * every read worked.
+   */
+  partial?: string[];
+  /**
    * The port map and domains the app had when pierhead disabled its proxy (Dokku clears
    * both, and `proxy:enable` brings back only the default domain). Only the API server
    * knows them, in memory.

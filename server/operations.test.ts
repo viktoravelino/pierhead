@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import dockerOptions from "../shared/fixtures/docker-options-report.json";
 import multiDomain from "../shared/fixtures/multi-domain.json";
 import networkAttached from "../shared/fixtures/network-report-attached.json";
+import networkMulti from "../shared/fixtures/network-report-multi.json";
 import neverDeployed from "../shared/fixtures/never-deployed.json";
 import running from "../shared/fixtures/running.json";
 import stopped from "../shared/fixtures/stopped.json";
@@ -10,6 +11,7 @@ import type { OperationRequest } from "../shared/operations";
 import type { DokkuError, DokkuResult, DokkuRun, DokkuSteps } from "./dokku";
 import {
   afterSuccess,
+  failureRefusal,
   preflight,
   proxyRestore,
   restoreToSave,
@@ -130,6 +132,12 @@ const host = fakeHost(
     "hello-noproxy": {
       ...withProxy(running, false),
       domains: { ...running.domains, "app-vhosts": "hello-noproxy.dokku.localhost" },
+    },
+    // Two networks in one setting (comma-joined by Dokku): pr2-probe-net and hello-net.
+    "hello-two-nets": {
+      ...running,
+      network: networkMulti,
+      domains: { ...running.domains, "app-vhosts": "hello-two-nets.dokku.localhost" },
     },
     // Attached to pr2-probe-net (initial, post-create) and hello-net (post-deploy).
     "hello-attached": {
@@ -494,6 +502,29 @@ describe("preflight: networks", () => {
     }
   });
 
+  test("destroy refuses a network that is one of several in an app's setting", async () => {
+    // hello-two-nets lists "pr2-probe-net,hello-net" for attach-post-create; both are in use.
+    const result = await refusal({
+      op: "network:destroy",
+      network: "hello-net",
+      confirm: "hello-net",
+    });
+    expect(result).toMatchObject({ status: 409, kind: "in-use" });
+    expect(result?.message).toContain("hello-two-nets");
+  });
+
+  test("set sees a network that shares a comma-joined setting", async () => {
+    expect(
+      await refusal({
+        op: "network:set",
+        app: "hello-two-nets",
+        property: "attach-post-deploy",
+        networks: ["hello-net"],
+        rebuild: false,
+      }),
+    ).toMatchObject({ kind: "conflict" });
+  });
+
   test("destroy allows an unused Dokku network, and refuses a missing or foreign one", async () => {
     const destroy = (network: string): OperationRequest => ({
       op: "network:destroy",
@@ -631,5 +662,76 @@ describe("preflight: scale and storage", () => {
     expect(await unmount("host-elsewhere", "/other")).toMatchObject({
       kind: "conflict",
     });
+  });
+});
+
+describe("when settings reads fail", () => {
+  const flaky = (failing: string): DokkuRun => {
+    const base = fakeHost({ hello: running });
+    return async (name, ...args) =>
+      name === failing
+        ? { ok: false, error: { kind: "command", message: "boom" } }
+        : base(name, ...args);
+  };
+
+  test("the detail still loads and names what is missing", async () => {
+    const result = await preflight(flaky("storage:list"), {
+      op: "ps:restart",
+      app: "hello",
+    });
+    expect(result.ok && result.app?.partial).toEqual(["storage"]);
+  });
+
+  test("a malformed settings answer is partial too, not a failed detail", async () => {
+    const base = fakeHost({ hello: running });
+    const garbled: DokkuRun = async (name, ...args) =>
+      name === "ps:scale"
+        ? { ok: true, stdout: "not json", stderr: "" }
+        : base(name, ...args);
+    const result = await preflight(garbled, { op: "ps:stop", app: "hello" });
+    expect(result.ok && result.app?.partial).toEqual(["formation"]);
+  });
+
+  test("start, stop and the like go ahead; operations that compare with the lost data do not", async () => {
+    const broken = flaky("storage:list");
+    expect(await refusal({ op: "ps:restart", app: "hello" }, broken)).toBeNull();
+    expect(
+      await refusal(
+        { op: "storage:mount", app: "hello", name: "data", containerPath: "/data" },
+        broken,
+      ),
+    ).toMatchObject({ status: 502, kind: "partial-read" });
+    expect(
+      await refusal(
+        { op: "network:alias-add", app: "hello", alias: "x", rebuild: false },
+        flaky("docker-options:report"),
+      ),
+    ).toMatchObject({ status: 502, kind: "partial-read" });
+  });
+
+  test("a required report failing still fails the read", async () => {
+    expect(
+      await refusal({ op: "ps:restart", app: "hello" }, flaky("ps:report")),
+    ).toMatchObject({ status: 502 });
+  });
+});
+
+describe("failureRefusal", () => {
+  const active: DokkuError = {
+    kind: "command",
+    message: "Unable to destroy network: network x has active endpoints (name:...)",
+  };
+
+  test("Docker's active-endpoints failure on a network destroy is a 409 in-use", () => {
+    const req: OperationRequest = { op: "network:destroy", network: "x", confirm: "x" };
+    expect(failureRefusal(req, active)).toMatchObject({ status: 409, kind: "in-use" });
+    expect(failureRefusal(req, active)?.message).toContain("rebuilt");
+  });
+
+  test("other failures, and other operations, are left alone", () => {
+    expect(
+      failureRefusal({ op: "network:destroy", network: "x", confirm: "x" }, boom),
+    ).toBeNull();
+    expect(failureRefusal({ op: "ps:stop", app: "hello" }, active)).toBeNull();
   });
 });

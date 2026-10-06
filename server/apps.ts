@@ -1,14 +1,17 @@
 import {
   buildNetworks,
   needsGitRev,
+  parseAliases,
   parseAppDetail,
   parseAppSummary,
   parseDomains,
+  parseFormation,
   parseNetworkList,
   parseReport,
+  parseStorage,
   type Report,
 } from "../shared/parse";
-import type { AppDetail, AppSummary, Network } from "../shared/types";
+import type { AppDetail, AppSummary, Network, StorageMount } from "../shared/types";
 import type { Dokku, DokkuError, DokkuResult, DokkuRun } from "./dokku";
 
 export type Outcome<T> = { ok: true; value: T } | { ok: false; error: DokkuError };
@@ -130,6 +133,21 @@ export const listNetworks = (dokku: DokkuRun) =>
   });
 
 /**
+ * Every app's storage mounts (`apps:list`, then one `storage:list` per app, queued under
+ * the runner's session limit), to tell whether a directory is already used elsewhere.
+ */
+export const listStorageUsers = (dokku: DokkuRun) =>
+  outcome<{ app: string; mounts: StorageMount[] }[]>(async () => {
+    const names = parseNames(stdoutOf(await dokku("apps:list")));
+    return Promise.all(
+      names.map(async (app) => ({
+        app,
+        mounts: parseStorage(stdoutOf(await dokku("storage:list", app))),
+      })),
+    );
+  });
+
+/**
  * Which app serves each domain: `apps:list` and the all-apps `domains:report`, two SSH
  * calls in parallel, zipped by position like `listApps`.
  */
@@ -156,8 +174,34 @@ export const isNotFound = (error: DokkuError) =>
   error.kind === "command" && error.message.includes("does not exist");
 
 /**
- * One app's full detail: twelve reads in parallel over the shared connection, then
- * `GIT_REV` when the git report has no sha.
+ * The text of one settings read when it succeeded and parses, else `fallback` (an empty
+ * answer) with `name` noted in `failed`: a broken settings read must not take the app's
+ * whole detail down with it.
+ */
+function softRead(
+  name: string,
+  result: DokkuResult,
+  fallback: string,
+  check: (stdout: string) => unknown,
+  failed: string[],
+) {
+  if (result.ok) {
+    try {
+      check(result.stdout);
+      return result.stdout;
+    } catch {
+      // falls through to the fallback
+    }
+  }
+  failed.push(name);
+  return fallback;
+}
+
+/**
+ * One app's full detail: twelve reads in parallel over the shared connection (the runner
+ * queues them under sshd's session limit), then `GIT_REV` when the git report has no sha.
+ * The first seven are required; the five settings reads (formation, storage, aliases,
+ * resources, Dockerfile path) may fail alone, which the detail's `partial` names.
  */
 export async function getApp(dokku: DokkuRun, name: string): Promise<Outcome<AppDetail>> {
   const result = await outcome<AppDetail>(async () => {
@@ -189,7 +233,8 @@ export async function getApp(dokku: DokkuRun, name: string): Promise<Outcome<App
       dokku("docker-options:report", name),
     ]);
     const gitReport = parseReport(stdoutOf(git));
-    return parseAppDetail(name, {
+    const failed: string[] = [];
+    const detail = parseAppDetail(name, {
       ps: parseReport(stdoutOf(ps)),
       domains: parseReport(stdoutOf(domains)),
       ports: parseReport(stdoutOf(ports)),
@@ -197,13 +242,22 @@ export async function getApp(dokku: DokkuRun, name: string): Promise<Outcome<App
       proxy: parseReport(stdoutOf(proxy)),
       builder: parseReport(stdoutOf(builder)),
       git: gitReport,
-      resource: parseReport(stdoutOf(resource)),
-      builderDockerfile: parseReport(stdoutOf(builderDockerfile)),
-      scale: stdoutOf(scale),
-      storage: stdoutOf(storage),
-      dockerOptions: stdoutOf(dockerOptions),
+      resource: parseReport(softRead("resources", resource, "{}", parseReport, failed)),
+      builderDockerfile: parseReport(
+        softRead("dockerfile path", builderDockerfile, "{}", parseReport, failed),
+      ),
+      scale: softRead("formation", scale, "[]", parseFormation, failed),
+      storage: softRead("storage", storage, "[]", parseStorage, failed),
+      dockerOptions: softRead(
+        "aliases",
+        dockerOptions,
+        '{"deploy-list":[]}',
+        parseAliases,
+        failed,
+      ),
       gitRev: await gitRevOf(dokku, name, gitReport),
     });
+    return failed.length > 0 ? { ...detail, partial: failed } : detail;
   });
   return !result.ok && isNotFound(result.error)
     ? { ok: false, error: { ...result.error, kind: "not-found" } }

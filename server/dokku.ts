@@ -1,6 +1,7 @@
 import { configValueProblem, isConfigKey } from "../shared/config";
 import {
   builderNames,
+  defaultProcessType,
   isAppName,
   isContainerPath,
   isCpu,
@@ -20,6 +21,7 @@ import {
   parsePortMapping,
   storageRoot,
 } from "../shared/grammar";
+import { createLimiter } from "./limit";
 
 /** Throws on anything that is not a valid app name; sshd joins argv with spaces. */
 function appArg(app: string) {
@@ -280,8 +282,12 @@ const resourceStep =
     return [...argv, appArg(app ?? "")];
   };
 
+/** A process type, or `_default_` for the setting that applies to every type. */
+const isResourceProcessType = (type: string) =>
+  type === defaultProcessType || isProcessType(type);
+
 const resourceFlags = {
-  "--process-type": isProcessType,
+  "--process-type": isResourceProcessType,
   "--memory": isMemory,
   "--cpu": isCpu,
 };
@@ -339,10 +345,10 @@ const operationSteps = {
   "resource:limit": resourceStep("resource:limit", resourceFlags),
   "resource:reserve": resourceStep("resource:reserve", resourceFlags),
   "resource:limit-clear": resourceStep("resource:limit-clear", {
-    "--process-type": isProcessType,
+    "--process-type": isResourceProcessType,
   }),
   "resource:reserve-clear": resourceStep("resource:reserve-clear", {
-    "--process-type": isProcessType,
+    "--process-type": isResourceProcessType,
   }),
   "storage:create": valueStep("storage:create", [], isStorageName, "storage name"),
   "storage:mount": mountStep("storage:mount", isStorageName, isContainerPath),
@@ -476,7 +482,13 @@ export function createDokku(config: DokkuConfig) {
     return built.ok ? exec(argv[0] ?? "", built.argv) : built;
   }
 
-  async function exec(name: string, argv: string[]): Promise<DokkuResult> {
+  // Every quick call shares one SSH connection, and sshd refuses more than MaxSessions (10)
+  // sessions on it, so extra parallel calls queue here. The timeout starts when a call does.
+  const limit = createLimiter(maxParallelCalls);
+
+  const exec = (name: string, argv: string[]) => limit(() => execNow(name, argv));
+
+  async function execNow(name: string, argv: string[]): Promise<DokkuResult> {
     const timeoutMs = commandTimeoutMs[name] ?? config.timeoutMs;
     let timedOut = false;
     try {
@@ -593,6 +605,9 @@ export function createDokku(config: DokkuConfig) {
 
   return Object.assign(run, { stream, step, streamStep });
 }
+
+/** Parallel quick calls on the shared connection; sshd's default MaxSessions is 10. */
+const maxParallelCalls = 8;
 
 /** Minimum time a streaming ssh lives before `kill` takes effect, see `stream`. */
 const settleMs = 1000;

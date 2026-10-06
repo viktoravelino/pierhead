@@ -232,8 +232,16 @@ describe("repository paths", () => {
 
 describe("resources", () => {
   test("memory is digits with an optional b, k, m or g", () => {
-    for (const m of ["256m", "1g", "512", "64k", "100b"]) expect(isMemory(m)).toBe(true);
+    for (const m of ["256m", "1g", "512", "6m", "6", "6144k", "6291456b"]) {
+      expect(isMemory(m)).toBe(true);
+    }
     for (const m of ["", "lots", "-1", "1.5g", "256mb", "256 m", "m", "1G"]) {
+      expect(isMemory(m)).toBe(false);
+    }
+  });
+
+  test("memory below Docker's 6 MiB minimum is refused", () => {
+    for (const m of ["5m", "0", "0m", "5", "64k", "100b", "6143k", "6291455b"]) {
       expect(isMemory(m)).toBe(false);
     }
   });

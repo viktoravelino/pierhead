@@ -67,6 +67,7 @@ export type ReadCache = ReturnType<typeof createReadCache>;
 export const cacheKeys = {
   list: "apps",
   networks: "networks",
+  storage: "storage",
   host: "host",
   app: (name: string) => `app:${name}`,
   config: (name: string) => `config:${name}`,
@@ -80,6 +81,7 @@ export function invalidateApp(cache: ReadCache, name: string) {
   cache.invalidate(
     cacheKeys.list,
     cacheKeys.networks,
+    cacheKeys.storage,
     cacheKeys.app(name),
     cacheKeys.config(name),
   );

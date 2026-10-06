@@ -40,6 +40,10 @@ export function parseReport(json: string): Report {
   );
 }
 
+/** Network lists: Dokku joins several names with commas, `network:set` takes them space separated. */
+const networkNames = (value: string | undefined) =>
+  (value ?? "").split(/[\s,]+/).filter(Boolean);
+
 const words = (value: string | undefined) => (value ?? "").split(" ").filter(Boolean);
 
 const processStates = [
@@ -126,9 +130,9 @@ export function parseBuild(report: Report): Build {
 /** `network:report`: every network the app attaches to, without duplicates. */
 export function parseNetworks(report: Report): AppNetwork[] {
   const names = [
-    ...words(report["computed-initial-network"]),
-    ...words(report["computed-attach-post-create"]),
-    ...words(report["computed-attach-post-deploy"]),
+    ...networkNames(report["computed-initial-network"]),
+    ...networkNames(report["computed-attach-post-create"]),
+    ...networkNames(report["computed-attach-post-deploy"]),
   ];
   return [...new Set(names)].map((name) => ({ name, alias: null }));
 }
@@ -137,9 +141,9 @@ export function parseNetworks(report: Report): AppNetwork[] {
 export const parseAttachments = (
   report: Report,
 ): Record<NetworkAttachment, string[]> => ({
-  "initial-network": words(report["initial-network"]),
-  "attach-post-create": words(report["attach-post-create"]),
-  "attach-post-deploy": words(report["attach-post-deploy"]),
+  "initial-network": networkNames(report["initial-network"]),
+  "attach-post-create": networkNames(report["attach-post-create"]),
+  "attach-post-deploy": networkNames(report["attach-post-deploy"]),
 });
 
 /** A network as `network:list --format json` describes it, before apps are attached. */
@@ -277,7 +281,7 @@ export const buildNetworks = (
       ...network,
       members: apps.flatMap(({ name, report }) => {
         const via = networkAttachments.filter((setting) =>
-          words(report[`computed-${setting}`]).includes(network.name),
+          networkNames(report[`computed-${setting}`]).includes(network.name),
         );
         return via.length > 0 ? [{ app: name, via }] : [];
       }),

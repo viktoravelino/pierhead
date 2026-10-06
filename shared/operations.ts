@@ -1,6 +1,7 @@
 import { fields, parseBody, refuse } from "./fields";
 import {
   builderNames,
+  defaultProcessType,
   formatFormationEntry,
   formatPortMapping,
   isAppName,
@@ -278,13 +279,19 @@ const aliasBody = <K extends OperationId>(op: K, strict: boolean) =>
 /** The `processType` of a resource request: a type Dokku may hold, or null for the default. */
 const processTypeOf = (body: unknown) => {
   const processType = fields(body).optionalString("processType");
-  return processType === null || isProcessType(processType)
+  if (processType === null || processType === defaultProcessType) return null;
+  return isProcessType(processType)
     ? processType
     : refuse(`Invalid process type: ${JSON.stringify(processType)}`);
 };
 
-const processTypeFlag = (processType: string | null) =>
-  processType === null ? [] : ["--process-type", processType];
+/** Setting without the flag already means every type; clearing without it would wipe every type's setting too. */
+const processTypeFlag = (processType: string | null, always = false) =>
+  processType !== null
+    ? ["--process-type", processType]
+    : always
+      ? ["--process-type", defaultProcessType]
+      : [];
 
 /** Names the setting when a value is set, nothing when it is blank (a blank leaves the setting alone). */
 const resourceValue = (
@@ -549,7 +556,7 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
         body,
         "memory",
         isMemory,
-        "a number with an optional unit b, k, m or g, such as 256m.",
+        "a number with an optional unit b, k, m or g, such as 256m, of at least 6m.",
       );
       const cpu = resourceValue(
         body,
@@ -587,7 +594,7 @@ export const operations: { [K in OperationId]: OperationDef<K> } = {
       processType: processTypeOf(body),
     })),
     commands: ({ app, kind, processType }) => [
-      step(`resource:${kind}-clear`, ...processTypeFlag(processType), app),
+      step(`resource:${kind}-clear`, ...processTypeFlag(processType, true), app),
     ],
     streams: false,
     availability: unlessDeploying(),

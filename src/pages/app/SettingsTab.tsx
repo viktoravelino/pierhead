@@ -301,6 +301,12 @@ export function SettingsTab({ app }: { app: AppView }) {
 
   return (
     <div className="flex max-w-3xl flex-col gap-6">
+      {app.partial && (
+        <p role="status" className="text-pretty text-sm text-warn">
+          Could not read {app.partial.join(", ")} from Dokku, so those panels may look
+          empty. Reload to try again.
+        </p>
+      )}
       <BuilderPanel app={app} />
       <ResourcesPanel app={app} />
       <StoragePanel app={app} />

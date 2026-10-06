@@ -26,6 +26,7 @@ import type {
   LogEndEvent,
   LogEvent,
   Network,
+  StorageMount,
 } from "../../shared/types";
 import {
   ApiError,
@@ -38,6 +39,7 @@ import {
   fetchHostDetails,
   fetchHostMetrics,
   fetchNetworks,
+  fetchStorageUsers,
   postOperation,
   putConfigVar,
   streamLogs,
@@ -225,6 +227,9 @@ const mockHostDetails = async () => {
 
 export const getNetworks: () => Promise<Network[]> =
   dataSource === "api" ? fetchNetworks : mockNetworks;
+/** Mounts per app, to warn when a storage directory is shared; the mock has none. */
+export const getStorageUsers: () => Promise<{ app: string; mounts: StorageMount[] }[]> =
+  dataSource === "api" ? fetchStorageUsers : async () => [];
 export const getHostDetails: () => Promise<HostDetails> =
   dataSource === "api" ? fetchHostDetails : mockHostDetails;
 
