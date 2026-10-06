@@ -8,6 +8,7 @@ import {
   LayoutGrid,
   Network,
   Play,
+  Plus,
   RotateCw,
   Search,
   Server,
@@ -21,15 +22,10 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  type AppActionId,
-  actionAvailability,
-  appActionIds,
-  appActions,
-} from "../api/actions";
 import { dataSource } from "../api/client";
+import { operationAvailability, operationUi, psOperationIds } from "../api/operations";
 import { appsQuery } from "../api/queries";
-import { useRequestAction, useWrites } from "./ActionHost";
+import { useRequestOperation, useWrites } from "./OperationHost";
 import { Kbd } from "./ui";
 
 type Item = {
@@ -40,12 +36,12 @@ type Item = {
   run: () => void;
 };
 
-const actionIcon = {
-  start: <Play className="size-4" aria-hidden="true" />,
-  restart: <RotateCw className="size-4" aria-hidden="true" />,
-  rebuild: <Hammer className="size-4" aria-hidden="true" />,
-  stop: <Square className="size-4" aria-hidden="true" />,
-} as const satisfies Record<AppActionId, ReactNode>;
+const psIcon = {
+  "ps:start": <Play className="size-4" aria-hidden="true" />,
+  "ps:restart": <RotateCw className="size-4" aria-hidden="true" />,
+  "ps:rebuild": <Hammer className="size-4" aria-hidden="true" />,
+  "ps:stop": <Square className="size-4" aria-hidden="true" />,
+} as const satisfies Record<(typeof psOperationIds)[number], ReactNode>;
 
 const allPages = [
   { label: "Apps", to: "/", Icon: LayoutGrid },
@@ -70,7 +66,7 @@ export function CommandPalette({
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const navigate = useNavigate();
-  const requestAction = useRequestAction();
+  const requestOperation = useRequestOperation();
   const writes = useWrites();
   const { data: apps = [] } = useQuery(appsQuery);
 
@@ -104,16 +100,27 @@ export function CommandPalette({
       icon: <Box className="size-4" aria-hidden="true" />,
       run: () => void navigate({ to: "/apps/$appName", params: { appName: app.name } }),
     })),
-    // Actions are hidden, not disabled, while the server is read-only.
+    // Operations are hidden, not disabled, while the server is read-only.
+    ...(writes.enabled
+      ? [
+          {
+            id: "apps-create",
+            group: "Run" as const,
+            label: "Add app",
+            icon: <Plus className="size-4" aria-hidden="true" />,
+            run: () => requestOperation({ op: "apps:create", app: "" }),
+          },
+        ]
+      : []),
     ...apps.flatMap((app) =>
-      (writes.enabled ? appActionIds : [])
-        .filter((action) => actionAvailability(action, app).ok)
-        .map((action) => ({
-          id: `${action}-${app.name}`,
+      (writes.enabled ? psOperationIds : [])
+        .filter((op) => operationAvailability(op, app).ok)
+        .map((op) => ({
+          id: `${op}-${app.name}`,
           group: "Run" as const,
-          label: `${appActions[action].label} ${app.name}`,
-          icon: actionIcon[action],
-          run: () => requestAction({ action, app: app.name }),
+          label: `${operationUi[op].label} ${app.name}`,
+          icon: psIcon[op],
+          run: () => requestOperation({ op, app: app.name }),
         })),
     ),
   ];

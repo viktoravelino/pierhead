@@ -1,7 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { hc } from "hono/client";
 import type { AppType } from "../../server/index";
-import type { ActionOutputEvent } from "../../shared/actions";
+import type { OperationOutputEvent, OperationRequest } from "../../shared/operations";
 import type { LogEndEvent, LogEvent } from "../../shared/types";
 import type { LogHandlers } from "./client";
 
@@ -133,25 +133,10 @@ export function streamLogs(name: string, { onLines, onEnd }: LogHandlers) {
   return () => source.close();
 }
 
-/** What the action route answers with, bar the event stream. */
-type ActionBody = { ok: true; output: string } | { ok: false; error: ApiErrorBody };
+/** What the operations route answers with, bar the event stream. */
+type OperationBody = { ok: true; output: string } | { ok: false; error: ApiErrorBody };
 type ApiErrorBody = { kind: string; message: string };
 type ApiFailure = { ok: false; error: ApiErrorBody };
-
-// Not `backend.…$post()`: the route also answers with an event stream, which erases the
-// JSON body types from the client.
-const postAction = (name: string, action: string) =>
-  jsonOrUnreachable(`/api/apps/${encodeURIComponent(name)}/actions/${action}`, {
-    method: "POST",
-  });
-
-/** Runs start, stop or restart; resolves with Dokku's output once the command is done. */
-export async function postQuickAction(name: string, action: string) {
-  const res = await postAction(name, action);
-  const body: ActionBody = await res.json();
-  if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
-  return body.output;
-}
 
 export async function fetchConfigKeys(name: string) {
   const res = await backend.api.apps[":name"].config.$get({ param: { name } });
@@ -222,27 +207,48 @@ async function* readEvents(source: ReadableStream<Uint8Array>) {
   }
 }
 
+/** The last non-empty line of Dokku's output, which says how the command ended. */
+const lastLine = (output: string) =>
+  output
+    .split("\n")
+    .map((line) => line.trim())
+    .findLast(Boolean);
+
 /**
- * Rebuilds an app, calling `onLine` for each line of Dokku's output. Resolves when the
- * rebuild succeeded and throws an `ApiError` when it failed or could not start. Not an
- * `EventSource` (those only GET), and nothing here aborts: the server finishes the
- * rebuild even if this tab goes away.
+ * Runs an operation. Quick ones resolve with Dokku's output once it is done; ones that
+ * redeploy answer with an event stream, whose lines go to `onLine` as they arrive, and
+ * `onStream` fires once the headers say so (a refusal before that is an ordinary error). Either
+ * way it resolves with the last line of output and throws an `ApiError` when the server
+ * refused, Dokku failed or the stream broke. Not an `EventSource` (those only GET), and
+ * nothing here aborts: the server finishes a deploy even if this tab goes away.
  */
-export async function streamRebuild(name: string, onLine: (line: string) => void) {
-  const res = await postAction(name, "rebuild");
+export async function postOperation(
+  req: OperationRequest,
+  onLine: (line: string) => void,
+  onStream: () => void,
+) {
+  // Not `backend.…$post()`: the route also answers with an event stream, which erases the
+  // JSON body types from the client.
+  const res = await jsonOrUnreachable(`/api/operations/${req.op}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
   if (!res.headers.get("content-type")?.includes("text/event-stream")) {
-    const body: ActionBody = await res.json();
-    if (body.ok)
-      throw new ApiError(res.status, "unexpected", "Expected an event stream.");
-    throw new ApiError(res.status, body.error.kind, body.error.message);
+    const body: OperationBody = await res.json();
+    if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
+    return lastLine(body.output);
   }
   if (!res.body) throw new ApiError(res.status, "unexpected", "Empty response.");
+  onStream();
+  let last: string | undefined;
   for await (const { event, data } of readEvents(res.body)) {
     if (event === "output") {
-      const output: ActionOutputEvent = JSON.parse(data);
+      const output: OperationOutputEvent = JSON.parse(data);
+      last = lastLine(output.line) ?? last;
       onLine(output.line);
     } else if (event === "end") {
-      return;
+      return last;
     } else if (event === "failed") {
       const end: LogEndEvent = JSON.parse(data);
       if (end.kind === "failed") throw new ApiError(res.status, "failed", end.message);
@@ -251,6 +257,6 @@ export async function streamRebuild(name: string, onLine: (line: string) => void
   throw new ApiError(
     res.status,
     "network",
-    "Lost the connection to the rebuild. It may still be running on the host.",
+    "Lost the connection to the operation. It may still be running on the host.",
   );
 }

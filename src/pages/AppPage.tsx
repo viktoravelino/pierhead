@@ -1,23 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ChevronRight, Hammer, LoaderCircle, Play, RotateCw, Square } from "lucide-react";
-import {
-  type AppActionId,
-  actionAvailability,
-  appActionIds,
-  appActions,
-} from "../api/actions";
 import { ApiError } from "../api/backend";
+import { operationAvailability, operationUi, psOperationIds } from "../api/operations";
 import { appQuery } from "../api/queries";
-import { usePendingAction, useRequestAction, useWrites } from "../components/ActionHost";
+import {
+  usePendingOperation,
+  useRequestOperation,
+  useWrites,
+} from "../components/OperationHost";
 import { AppStatusBadge } from "../components/Signal";
 import { ErrorNote, Panel, Skeleton } from "../components/ui";
 import { ConfigTab } from "./app/ConfigTab";
 import { LogsTab } from "./app/LogsTab";
 import { NetworkTab } from "./app/NetworkTab";
 import { OverviewTab } from "./app/OverviewTab";
+import { SettingsTab } from "./app/SettingsTab";
 
-export const appTabs = ["overview", "logs", "config", "network"] as const;
+export const appTabs = ["overview", "logs", "config", "network", "settings"] as const;
 export type AppTab = (typeof appTabs)[number];
 
 const tabLabels = {
@@ -25,14 +25,15 @@ const tabLabels = {
   logs: "Logs",
   config: "Config",
   network: "Domains & Network",
+  settings: "Settings",
 } as const satisfies Record<AppTab, string>;
 
-const actionIcons = {
-  start: Play,
-  restart: RotateCw,
-  rebuild: Hammer,
-  stop: Square,
-} as const satisfies Record<AppActionId, typeof RotateCw>;
+const psIcons = {
+  "ps:start": Play,
+  "ps:restart": RotateCw,
+  "ps:rebuild": Hammer,
+  "ps:stop": Square,
+} as const satisfies Record<(typeof psOperationIds)[number], typeof RotateCw>;
 
 function Loading() {
   return (
@@ -53,8 +54,8 @@ export function AppPage({ appName, tab }: { appName: string; tab: AppTab }) {
     isFetching,
     refetch,
   } = useQuery(appQuery(appName));
-  const requestAction = useRequestAction();
-  const pending = usePendingAction();
+  const requestOperation = useRequestOperation();
+  const pending = usePendingOperation();
   const writes = useWrites();
 
   if (isPending) return <Loading />;
@@ -110,24 +111,24 @@ export function AppPage({ appName, tab }: { appName: string; tab: AppTab }) {
             {app.sample && <p className="max-w-[65ch] text-dim">{app.sample.summary}</p>}
           </div>
           <div className="flex flex-wrap gap-2">
-            {appActionIds.map((id) => {
-              const availability = actionAvailability(id, app);
-              const running = pending?.app === app.name && pending.action === id;
+            {psOperationIds.map((id) => {
+              const availability = operationAvailability(id, app);
+              const running = pending?.app === app.name && pending.op === id;
               const disabledReason = !writes.enabled
                 ? writes.reason
                 : !availability.ok
                   ? availability.reason
                   : undefined;
-              const Icon = running ? LoaderCircle : actionIcons[id];
+              const Icon = running ? LoaderCircle : psIcons[id];
               return (
                 <button
                   key={id}
                   type="button"
                   disabled={disabledReason !== undefined || pending !== null}
                   title={disabledReason}
-                  onClick={() => requestAction({ action: id, app: app.name })}
+                  onClick={() => requestOperation({ op: id, app: app.name })}
                   className={`flex h-9 items-center gap-2 rounded-sm border px-3 font-medium disabled:cursor-not-allowed disabled:opacity-45 ${
-                    appActions[id].tone === "danger"
+                    operationUi[id].tone === "danger"
                       ? "border-crit/40 text-crit enabled:hover:bg-crit/10"
                       : "border-line-strong enabled:hover:bg-raised"
                   }`}
@@ -136,7 +137,7 @@ export function AppPage({ appName, tab }: { appName: string; tab: AppTab }) {
                     className={`size-3.5 ${running ? "animate-spin" : ""}`}
                     aria-hidden="true"
                   />
-                  {running ? appActions[id].pending : appActions[id].label}
+                  {running ? operationUi[id].pending : operationUi[id].label}
                 </button>
               );
             })}
@@ -176,6 +177,7 @@ export function AppPage({ appName, tab }: { appName: string; tab: AppTab }) {
       {tab === "logs" && <LogsTab app={app} />}
       {tab === "config" && <ConfigTab app={app} />}
       {tab === "network" && <NetworkTab app={app} />}
+      {tab === "settings" && <SettingsTab app={app} />}
     </>
   );
 }

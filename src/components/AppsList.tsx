@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { Plus } from "lucide-react";
 import type { AppRow } from "../api/client";
 import { appsQuery } from "../api/queries";
+import { usePendingOperation, useRequestOperation, useWrites } from "./OperationHost";
 import { AppStatusBadge, appTone, Signal } from "./Signal";
 import { EmptyNote, ErrorNote, Mono, Panel, RevisionStamp, Skeleton } from "./ui";
 
@@ -94,10 +96,41 @@ function AppRowItem({ app }: { app: AppRow }) {
   );
 }
 
+function AddAppButton() {
+  const requestOperation = useRequestOperation();
+  const pending = usePendingOperation();
+  const writes = useWrites();
+  const disabledReason = !writes.enabled
+    ? writes.reason
+    : pending
+      ? "Another operation is running."
+      : undefined;
+  return (
+    <button
+      type="button"
+      disabled={disabledReason !== undefined}
+      title={disabledReason}
+      onClick={() => requestOperation({ op: "apps:create", app: "" })}
+      className="flex h-8 items-center gap-1.5 rounded-sm border border-line-strong px-2.5 text-sm font-medium enabled:hover:bg-raised disabled:cursor-not-allowed disabled:opacity-45"
+    >
+      <Plus className="size-3.5" aria-hidden="true" />
+      Add app
+    </button>
+  );
+}
+
 export function AppsList() {
   const { data: apps, error, isPending, isFetching, refetch } = useQuery(appsQuery);
   return (
-    <Panel title="Apps" action={apps && !error && <Rollup apps={apps} />}>
+    <Panel
+      title="Apps"
+      action={
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {apps && !error && <Rollup apps={apps} />}
+          <AddAppButton />
+        </div>
+      }
+    >
       <div
         className={`label hidden gap-x-4 border-b border-line px-4 py-2 pl-[calc(1rem+2px)] md:grid ${columns}`}
       >

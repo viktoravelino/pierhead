@@ -1,20 +1,20 @@
 // THE SEAM. Every read and action the UI performs goes through this module, and it is the
 // only place that knows which data source is active. In "api" mode apps, host, metrics,
-// networks, logs, config and actions go through the backend (./backend); deploy history,
+// networks, logs, config and operations go through the backend (./backend); deploy history,
 // activity and backups, and everything in "mock" mode, are served from fixtures after a
 // small artificial delay. Nothing outside src/api should import
 // mock-data.ts.
 
-import { type AppActionId, appActions, commandLine } from "../../shared/actions";
 import { type ConfigKey, isManagedKey } from "../../shared/config";
+import { commandLine, type OperationRequest } from "../../shared/operations";
 import {
   deriveStatus,
   parseDomains,
   parseLogEvent,
-  parsePorts,
   parseProcesses,
   parseProxyEnabled,
   parseProxyType,
+  portsOf,
 } from "../../shared/parse";
 import type {
   App,
@@ -38,10 +38,9 @@ import {
   fetchHostDetails,
   fetchHostMetrics,
   fetchNetworks,
-  postQuickAction,
+  postOperation,
   putConfigVar,
   streamLogs,
-  streamRebuild,
 } from "./backend";
 import {
   activity,
@@ -103,7 +102,7 @@ function toApp(raw: RawApp): AppView {
     proxyType: parseProxyType(raw.proxy),
     revision: { sha: lastDeploy.rev, updatedAt: lastDeploy.at },
     ...parseDomains(raw.domains),
-    ports: parsePorts(raw.ports, false),
+    ports: portsOf(raw.ports, false),
     networks: raw.networks,
     sample: { summary: raw.summary, lastDeploy },
   };
@@ -273,35 +272,21 @@ const mockLogs = (app: AppView, { onLines, onEnd }: LogHandlers) => {
 export const subscribeToLogs: (app: AppView, handlers: LogHandlers) => () => void =
   dataSource === "api" ? (app, handlers) => streamLogs(app.name, handlers) : mockLogs;
 
-/** The last non-empty line of Dokku's output, which says how the command ended. */
-const lastLine = (output: string) =>
-  output
-    .split("\n")
-    .map((line) => line.trim())
-    .findLast(Boolean);
-
 /**
- * Runs an app action. In "api" mode it executes on the host and resolves once Dokku is
- * done (a rebuild reports each output line to `onOutput` as it goes); it throws an
- * `ApiError` carrying Dokku's message when refused or failed. In "mock" mode it only
+ * Runs an operation. In "api" mode it executes on the host and resolves once Dokku is
+ * done (one that redeploys calls `onStream` once the server starts streaming, then reports
+ * each output line to `onOutput` as it goes); it throws
+ * an `ApiError` carrying Dokku's message when refused or failed. In "mock" mode it only
  * resolves with the command that would have run. `detail` is a one-line outcome.
  */
-export async function runAction(
-  action: AppActionId,
-  app: string,
+export async function runOperation(
+  req: OperationRequest,
   onOutput: (line: string) => void,
+  onStream: () => void,
 ): Promise<{ detail?: string }> {
   if (dataSource === "mock") {
     await latency();
-    return { detail: commandLine(action, app) };
+    return { detail: commandLine(req) };
   }
-  if (appActions[action].streams) {
-    let last: string | undefined;
-    await streamRebuild(app, (line) => {
-      last = line.trim() || last;
-      onOutput(line);
-    });
-    return { detail: last };
-  }
-  return { detail: lastLine(await postQuickAction(app, action)) };
+  return { detail: await postOperation(req, onOutput, onStream) };
 }

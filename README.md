@@ -17,7 +17,7 @@ browser ── /api/* ──> Hono (Bun) ── ssh ──> dokku on the host
 
 The UI reads either fixtures or the backend, chosen at build time by `VITE_DATA_SOURCE`:
 
-- `mock` (the default; no backend or Docker needed): everything is fixtures, and actions only toast the command.
+- `mock` (the default; no backend or Docker needed): everything is fixtures, and operations only toast the command.
 - `api` (set by `compose.yaml`, `scripts/lab.sh` and the production image): the UI reads the backend.
 
 | In `api` mode | Source |
@@ -77,7 +77,7 @@ Docker-in-Docker notes: Dokku talks to the host Docker socket, so apps are sibli
 
 ## Running against the lab host (read-only)
 
-Runs pierhead from your machine, outside Docker, against a real Dokku host. It never writes: the script unsets `PIERHEAD_ALLOW_WRITES`, so actions and config changes answer `403 writes-disabled` (and the UI shows the read-only badge).
+Runs pierhead from your machine, outside Docker, against a real Dokku host. It never writes: the script unsets `PIERHEAD_ALLOW_WRITES`, so operations and config changes answer `403 writes-disabled` (and the UI shows the read-only badge).
 
 ```sh
 cp .env.lab.example .env.lab   # gitignored; host, port, user, key and known_hosts paths, no secrets
@@ -99,8 +99,8 @@ Server environment:
 | --- | --- | --- |
 | `DOKKU_SSH_HOST`, `DOKKU_SSH_KEY`, `DOKKU_SSH_KNOWN_HOSTS` | required (the image sets `DOKKU_SSH_KNOWN_HOSTS=/var/lib/pierhead/known_hosts`) | SSH target, private key path, `known_hosts` path |
 | `DOKKU_SSH_PORT`, `DOKKU_SSH_USER` | `22`, `dokku` | |
-| `DOKKU_SSH_TIMEOUT_MS` | `10000` | Default per-command timeout (actions and config writes get 120 s) |
-| `PIERHEAD_ALLOW_WRITES` | unset (read-only) | Only the literal `true` allows actions and config changes |
+| `DOKKU_SSH_TIMEOUT_MS` | `10000` | Default per-command timeout (operations and config writes get 120 s) |
+| `PIERHEAD_ALLOW_WRITES` | unset (read-only) | Only the literal `true` allows operations and config changes |
 | `PIERHEAD_CACHE_TTL_MS` | `5000` | Read cache lifetime; `0` turns it off |
 | `GLANCES_URL` | unset (metrics off) | Glances base URL, e.g. `http://glances:61208` |
 | `PIERHEAD_STATIC_DIR`, `NODE_ENV` | unset | Serve the built UI from this directory, or from `dist/` when `NODE_ENV=production` |
@@ -108,15 +108,19 @@ Server environment:
 
 The server checks these at startup and exits with a readable message when one is missing or malformed. For the UI, `VITE_DATA_SOURCE` picks the data source and `API_URL` (default `http://127.0.0.1:3001`) is the Vite proxy target.
 
-## App actions and the write switch
+## Operations and the write switch
 
-`POST /api/apps/:name/actions/:action` runs `ps:start`, `ps:stop`, `ps:restart` or `ps:rebuild` (the table is `shared/actions.ts`). The server refuses with `403 writes-disabled` unless it was started with the literal `PIERHEAD_ALLOW_WRITES=true`; the default is read-only, and `GET /api/health` reports `writesEnabled`. Never set it for a real host without meaning to.
+`POST /api/operations/:op` runs one row of the table in `shared/operations.ts`: `ps:start`, `ps:stop`, `ps:restart`, `ps:rebuild`, `apps:create`, `apps:destroy`, `domains:add|remove|set`, `ports:add|remove|set` and `proxy:enable|disable`. The body is JSON, `{ app, ... }` per operation; the table says how each is parsed, which Dokku commands it runs and whether it streams. The server refuses with `403 writes-disabled` unless it was started with the literal `PIERHEAD_ALLOW_WRITES=true`; the default is read-only, and `GET /api/health` reports `writesEnabled`. Never set it for a real host without meaning to.
 
-- start, stop, restart answer `{ ok: true, output }` once Dokku is done (about 25s for start and restart, 1s for stop). Dokku exits 0 when it did nothing (start on a running app, anything on a never-deployed one); the server turns that into `409` with Dokku's message.
-- rebuild streams server-sent events: `output` (`{ line }`) per line, then `end` or `failed`. It keeps running if the client disconnects.
-- Every attempt is logged to the server's stdout with app, action and outcome.
+- Quick operations answer `{ ok: true, output }` once Dokku is done (about 25s for start and restart, 1s for stop, 1-2s for create, domains and ports). Dokku exits 0 when start, stop or restart did nothing (start on a running app, anything on a never-deployed one); the server turns that into `409` with Dokku's message.
+- Rebuild, and a proxy toggle on a deployed app, stream server-sent events: `output` (`{ line }`) per line, then `end` or `failed`. They keep running if the client disconnects.
+- Free-form values are checked against the grammars in `shared/grammar.ts`: additions (app names, domains, `http`/`https` port mappings) against strict ones, removals and restores against a shell-safety one (they take whatever Dokku holds), and the server checks each step again before ssh.
+- Before anything runs the server reads the live state: Dokku's deploy lock (`apps:locked`; a held lock is `409 deploy-in-progress`, also for the rebuild this server is streaming), then the app's reports. Other refusals: `400 invalid-body`, `400 confirm-mismatch` (destroy needs `confirm` equal to the app name, checked first), `404 not-found`, `409 unavailable` (the app's state rules it out, e.g. start on a running app, domains while the proxy is off), `409 exists` (create), `409 domain-in-use` (another app serves it, also for a dotted new app name), `409 conflict` (removing a domain or set port mapping the app does not have).
+- `proxy:disable` makes Dokku clear the app's port map and its custom domains, and `proxy:enable` brings back only the default domain. The server remembers both in memory when there was something to lose (a restart forgets them) and `GET /api/apps/:name` returns them as `proxyRestore`; `proxy:enable` with `ports` and `domains` sets them again in the same request. Ports Dokku only detected at deploy (`detected: true` in the detail) cannot be removed.
+- Every attempt is logged to the server's stdout: `operation op=<id> app=<name> outcome=<ok|refused|failed> in <ms>`.
+- A successful operation (and a streamed one, however it ends) drops that app's cache entries, the list and the networks.
 
-In the UI the confirm dialog shows the exact command; a read-only server shows a "read-only" badge in the sidebar, disables the buttons and hides the palette's actions.
+In the UI the confirm dialog shows the exact command (built by the same table); the Overview has "Add app" (also in the palette), the Domains & Network tab edits domains, ports and the proxy, and Settings holds the Danger zone. A read-only server shows a "read-only" badge in the sidebar, disables the controls with the reason and hides the palette's operations.
 
 ## Config vars
 
