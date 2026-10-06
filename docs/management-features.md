@@ -299,6 +299,8 @@ Reused as is: the writes context and read-only badge, the SSE reader in `src/api
 
 ## 5. Phasing
 
+*Implementation note (PR 1):* the activity recorder is not part of it, so the map `proxy:disable` clears is kept in server memory (returned as `AppDetail.previousPorts`) instead of in the activity record, and the Settings tab exists with only the Danger zone until PR 2. The Caddy `basic_auth` README note is also still open.
+
 | PR | Delivers | Size |
 | --- | --- | --- |
 | 1. Framework and routing | `shared/operations.ts` with the four existing actions moved in, `POST /api/operations/:op`, `OperationHost` and the field renderer, the activity recorder (file plus memory, no UI yet), create app, destroy app, domains, ports, proxy enable/disable/build-config, README section and the Caddy `basic_auth` note. Ships only after the Caddyfile change is live. | L |
