@@ -418,7 +418,32 @@ function StoragePanel({ app }: { app: AppView }) {
   );
 }
 
-/** App settings: build, resources and storage, then the Danger zone, which holds the irreversible operations. */
+/** One titled action of the Danger zone: what it does on the left, its button on the right. */
+function ZoneRow({
+  title,
+  children,
+  action,
+}: {
+  title: string;
+  children: ReactNode;
+  action: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 px-4 py-4">
+      <div className="flex min-w-0 flex-col gap-1">
+        <h3 className="font-medium">{title}</h3>
+        <p className="max-w-[60ch] text-pretty text-dim">{children}</p>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+const zoneButton = "h-9 rounded-sm border px-3 font-medium";
+const dangerButton = `${zoneButton} border-crit/40 text-crit enabled:hover:bg-crit/10 disabled:cursor-not-allowed disabled:opacity-45`;
+const neutralButton = `${zoneButton} border-line-strong enabled:hover:bg-raised disabled:cursor-not-allowed disabled:opacity-45`;
+
+/** App settings: build, resources and storage, then the Danger zone: rename, clone and the irreversible destroy. */
 export function SettingsTab({ app }: { app: AppView }) {
   const requestOperation = useRequestOperation();
   const writes = useWrites();
@@ -442,25 +467,71 @@ export function SettingsTab({ app }: { app: AppView }) {
       <ResourcesPanel app={app} />
       <StoragePanel app={app} />
       <Panel title="Danger zone" className="border-crit/40">
-        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 px-4 py-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <h3 className="font-medium">Destroy this app</h3>
-            <p className="max-w-[60ch] text-pretty text-dim">
-              Removes <Mono>{app.name}</Mono> with its containers, image, config, domains
-              and vhost. You will be asked to type its name. This cannot be undone.
-            </p>
-          </div>
-          <button
-            type="button"
-            disabled={disabledReason !== undefined}
-            title={disabledReason}
-            onClick={() =>
-              requestOperation({ op: "apps:destroy", app: app.name, confirm: "" })
+        <div className="divide-y divide-line">
+          <ZoneRow
+            title="Clone this app"
+            action={
+              <OperationButton
+                app={app}
+                request={{
+                  op: "apps:clone",
+                  app: app.name,
+                  newName: "",
+                  skipDeploy: true,
+                }}
+                label="Clone app"
+                className={neutralButton}
+              >
+                Clone app
+              </OperationButton>
             }
-            className="h-9 rounded-sm border border-crit/40 px-3 font-medium text-crit enabled:hover:bg-crit/10 disabled:cursor-not-allowed disabled:opacity-45"
           >
-            Destroy app
-          </button>
+            Copies <Mono>{app.name}</Mono> with its config (secrets included), ports,
+            networks and storage mounts under a new name. Custom domains are not copied,
+            and mounts point at the same host directories.
+          </ZoneRow>
+          <ZoneRow
+            title="Rename this app"
+            action={
+              <OperationButton
+                app={app}
+                request={{
+                  op: "apps:rename",
+                  app: app.name,
+                  newName: "",
+                  skipDeploy: false,
+                  confirm: "",
+                }}
+                label="Rename app"
+                className={dangerButton}
+              >
+                Rename app
+              </OperationButton>
+            }
+          >
+            Changes the name, and with it the default domain and the git remote, which
+            breaks every link to the old name. Dokku redeploys the app under the new name.
+            Custom domains stay.
+          </ZoneRow>
+          <ZoneRow
+            title="Destroy this app"
+            action={
+              <button
+                type="button"
+                disabled={disabledReason !== undefined}
+                title={disabledReason}
+                onClick={() =>
+                  requestOperation({ op: "apps:destroy", app: app.name, confirm: "" })
+                }
+                className={dangerButton}
+              >
+                Destroy app
+              </button>
+            }
+          >
+            Removes <Mono>{app.name}</Mono> with its containers, image, config, domains
+            and vhost. You will be asked to type its name. This cannot be undone.
+          </ZoneRow>
         </div>
       </Panel>
     </div>

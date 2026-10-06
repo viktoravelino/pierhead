@@ -32,7 +32,13 @@ import {
   operationUi,
   psOperationIds,
 } from "../api/operations";
-import { appsQuery, networksQuery, storageUsersQuery } from "../api/queries";
+import {
+  appsQuery,
+  hostDetailsQuery,
+  hostQuery,
+  networksQuery,
+  storageUsersQuery,
+} from "../api/queries";
 import {
   Checkbox,
   FormationList,
@@ -172,6 +178,8 @@ export function OperationHost({ children }: { children: ReactNode }) {
       if (dataSource === "mock") return;
       if (req.op === "apps:create") {
         void navigate({ to: "/apps/$appName", params: { appName: req.app } });
+      } else if (req.op === "apps:rename" || req.op === "apps:clone") {
+        void navigate({ to: "/apps/$appName", params: { appName: req.newName } });
       } else if (req.op === "apps:destroy") {
         void navigate({ to: "/" });
       }
@@ -194,6 +202,9 @@ export function OperationHost({ children }: { children: ReactNode }) {
       if (dataSource === "mock") return;
       void queryClient.invalidateQueries({ queryKey: appsQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: networksQuery.queryKey });
+      // The global settings change what the Host page and every app show.
+      void queryClient.invalidateQueries({ queryKey: hostQuery.queryKey });
+      void queryClient.invalidateQueries({ queryKey: hostDetailsQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: storageUsersQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: backendHealthQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: ["activity"] });
@@ -449,6 +460,71 @@ function Fields({
           value={request.confirm}
           placeholder={request.app}
           onChange={(confirm) => onChange({ ...request, confirm })}
+        />
+      );
+    case "apps:rename":
+      return (
+        <>
+          <TextField
+            label={`New name for ${request.app}`}
+            value={request.newName}
+            placeholder="my-app"
+            hint="Lowercase letters, digits, dots and hyphens."
+            onChange={(newName) => onChange({ ...request, newName })}
+          />
+          <Checkbox
+            checked={request.skipDeploy}
+            onChange={(skipDeploy) => onChange({ ...request, skipDeploy })}
+          >
+            Skip the deploy. The app is only renamed and, if it was running, stays down
+            until you start it.
+          </Checkbox>
+          <TextField
+            label={`Type ${request.app} to confirm`}
+            value={request.confirm}
+            placeholder={request.app}
+            focus={false}
+            onChange={(confirm) => onChange({ ...request, confirm })}
+          />
+        </>
+      );
+    case "apps:clone":
+      return (
+        <>
+          <TextField
+            label={`Name of the copy of ${request.app}`}
+            value={request.newName}
+            placeholder="my-app-copy"
+            hint="Lowercase letters, digits, dots and hyphens."
+            onChange={(newName) => onChange({ ...request, newName })}
+          />
+          <Checkbox
+            checked={request.skipDeploy}
+            onChange={(skipDeploy) => onChange({ ...request, skipDeploy })}
+          >
+            Skip the deploy. The copy is created but runs nothing until you deploy it.
+          </Checkbox>
+        </>
+      );
+    case "domains:add-global":
+    case "domains:set-global":
+      return (
+        <StringList
+          label="Global domains"
+          values={request.domains}
+          placeholder="lab.example.com"
+          invalid={(value) => value !== "" && !isDomain(value)}
+          onChange={(domains) => onChange({ ...request, domains })}
+        />
+      );
+    case "git:set-global":
+      return (
+        <TextField
+          label="Global deploy branch"
+          value={request.branch}
+          placeholder="main"
+          hint="Empty goes back to Dokku's default, master."
+          onChange={(branch) => onChange({ ...request, branch })}
         />
       );
     case "domains:add":
@@ -739,6 +815,7 @@ function Fields({
     case "ps:restart":
     case "ps:rebuild":
     case "domains:remove":
+    case "domains:remove-global":
     case "ports:remove":
     case "proxy:disable":
     case "apps:unlock":

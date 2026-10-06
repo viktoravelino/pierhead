@@ -3,10 +3,12 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   Activity,
   Box,
+  Copy,
   CornerDownLeft,
   Hammer,
   LayoutGrid,
   Network,
+  Pencil,
   Play,
   Plus,
   RotateCw,
@@ -108,6 +110,40 @@ export function CommandPalette({
           },
         ]
       : []),
+    // The dialog asks for the new name; rename also asks for the old one typed back.
+    ...apps.flatMap((app) =>
+      writes.enabled && operationAvailability("apps:clone", app).ok
+        ? [
+            {
+              id: `apps-clone-${app.name}`,
+              group: "Run" as const,
+              label: `${operationUi["apps:clone"].label} ${app.name}`,
+              icon: <Copy className="size-4" aria-hidden="true" />,
+              run: () =>
+                requestOperation({
+                  op: "apps:clone",
+                  app: app.name,
+                  newName: "",
+                  skipDeploy: true,
+                }),
+            },
+            {
+              id: `apps-rename-${app.name}`,
+              group: "Run" as const,
+              label: `${operationUi["apps:rename"].label} ${app.name}`,
+              icon: <Pencil className="size-4" aria-hidden="true" />,
+              run: () =>
+                requestOperation({
+                  op: "apps:rename",
+                  app: app.name,
+                  newName: "",
+                  skipDeploy: false,
+                  confirm: "",
+                }),
+            },
+          ]
+        : [],
+    ),
     ...apps.flatMap((app) =>
       (writes.enabled ? psOperationIds : [])
         .filter((op) => operationAvailability(op, app).ok)
