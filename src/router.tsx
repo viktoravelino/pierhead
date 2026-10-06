@@ -1,10 +1,15 @@
-import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import {
+  createRootRoute,
+  createRoute,
+  createRouter,
+  redirect,
+} from "@tanstack/react-router";
 import { Shell } from "./components/Shell";
 import { ActivityPage } from "./pages/ActivityPage";
 import { AppPage, type AppTab, appTabs } from "./pages/AppPage";
+import { HostPage } from "./pages/HostPage";
 import { NetworksPage } from "./pages/NetworksPage";
 import { OverviewPage } from "./pages/OverviewPage";
-import { SettingsPage } from "./pages/SettingsPage";
 
 const rootRoute = createRootRoute({ component: Shell });
 
@@ -39,10 +44,19 @@ const activityRoute = createRoute({
   component: ActivityPage,
 });
 
+const hostRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/host",
+  component: HostPage,
+});
+
+// The page was "Settings" before it showed the real host.
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
-  component: SettingsPage,
+  beforeLoad: () => {
+    throw redirect({ to: "/host", replace: true });
+  },
 });
 
 const routeTree = rootRoute.addChildren([
@@ -50,6 +64,7 @@ const routeTree = rootRoute.addChildren([
   appRoute,
   networksRoute,
   activityRoute,
+  hostRoute,
   settingsRoute,
 ]);
 

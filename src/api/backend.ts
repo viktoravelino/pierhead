@@ -69,6 +69,21 @@ export async function fetchApps() {
   return body.apps;
 }
 
+export async function fetchNetworks() {
+  const res = await backend.api.networks.$get();
+  const body = await res.json();
+  if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
+  return body.networks;
+}
+
+export async function fetchHostDetails() {
+  const res = await backend.api.host.$get();
+  const body = await res.json();
+  if (!body.ok) throw new ApiError(res.status, body.error.kind, body.error.message);
+  const { dokku, pierhead } = body;
+  return { dokku, pierhead };
+}
+
 export async function fetchApp(name: string) {
   const res = await backend.api.apps[":name"].$get({ param: { name } });
   const body = await res.json();

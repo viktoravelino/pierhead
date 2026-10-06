@@ -39,6 +39,14 @@ const report = (plugin: string) => (app?: string) => [
   "json",
 ];
 
+/** `<plugin>:report --global` as JSON: the host-wide settings, one object. */
+const globalReport = (plugin: string) => () => [
+  `${plugin}:report`,
+  "--global",
+  "--format",
+  "json",
+];
+
 /**
  * Dokku over SSH. Every command pierhead may run is listed in `commands` (read-only);
  * each entry turns typed args into the argv sent after `dokku@host`. Adding one is one
@@ -55,6 +63,15 @@ const commands = {
   "proxy:report": report("proxy"),
   "builder:report": report("builder"),
   "git:report": report("git"),
+  "domains:report:global": globalReport("domains"),
+  "proxy:report:global": globalReport("proxy"),
+  "scheduler:report:global": globalReport("scheduler"),
+  "builder:report:global": globalReport("builder"),
+  "git:report:global": globalReport("git"),
+  // Docker networks on the host, and the registered SSH keys and plugins.
+  "network:list": () => ["network:list", "--format", "json"],
+  "plugin:list": () => ["plugin:list", "--format", "json"],
+  "ssh-keys:list": () => ["ssh-keys:list", "--format", "json"],
   // Writes. Dokku exits 0 for no-ops (start on a running app, anything on a never-deployed
   // one), only warning on a `!` line; the route turns those into conflicts.
   "ps:start": (app: string) => ["ps:start", appArg(app)],

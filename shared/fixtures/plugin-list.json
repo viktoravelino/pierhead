@@ -1,0 +1,462 @@
+[
+  {
+    "name": "00_dokku-standard",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core standard plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "20_events",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core events logging plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "app-json",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core app-json plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "apps",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core apps plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "builder",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core builder plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "builder-dockerfile",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core builder-dockerfile plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "builder-herokuish",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core builder-herokuish plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "builder-lambda",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core builder-lambda plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "builder-nixpacks",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core builder-nixpacks plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "builder-null",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core builder-null plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "builder-pack",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core builder-pack plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "builder-railpack",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core builder-railpack plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "buildpacks",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core buildpacks plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "builds",
+    "version": "0.34.0",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core builds plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "caddy-vhosts",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core caddy-vhosts plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "certs",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core certificate management plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "checks",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core checks plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "common",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core common plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "config",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core config plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "cron",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core cron plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "docker-options",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core docker-options plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "domains",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core domains plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "enter",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core enter plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "git",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core git plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "haproxy-vhosts",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core haproxy-vhosts plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "logs",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core logs plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "network",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core network plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "nginx-vhosts",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core nginx-vhosts plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "openresty-vhosts",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core openresty-vhosts plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "plugin",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core plugin plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "ports",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core ports plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "proxy",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core proxy plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "ps",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core ps plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "registry",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core registry plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "repo",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core repo plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "resource",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core resource plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "run",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core run plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "scheduler",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core scheduler plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "scheduler-docker-local",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core scheduler-docker-local plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "scheduler-k3s",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core scheduler-k3s plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "scheduler-null",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core scheduler-null plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "shell",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core shell plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "ssh-keys",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core ssh-keys plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "storage",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core storage plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "trace",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core trace plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  },
+  {
+    "name": "traefik-vhosts",
+    "version": "0.38.31",
+    "enabled": true,
+    "core": true,
+    "description": "dokku core traefik-vhosts plugin",
+    "source_url": "",
+    "committish": "",
+    "branch": ""
+  }
+]

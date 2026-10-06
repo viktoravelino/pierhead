@@ -29,6 +29,14 @@ seed_app() {
   fi
 }
 
+# attach_network APP PROPERTY: attach APP to hello-net through PROPERTY and rebuild it (~25s),
+# unless the property is already set.
+attach_network() {
+  [ "$(dokku network:report "$1" "--network-$2" 2>/dev/null)" = "hello-net" ] && return 0
+  dokku network:set "$1" "$2" hello-net >/dev/null
+  dokku ps:rebuild "$1" >/dev/null
+}
+
 up() {
   mkdir -p .dev/ssh .dev/state
   [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N "" -C pierhead-dev -f "$KEY"
@@ -63,6 +71,17 @@ up() {
   # Created, never deployed.
   seed_app hello-new
 
+  # One named network, attached to two apps in two different ways, so the Networks page has
+  # something to show. network:set only takes effect on the next deploy, so the apps are
+  # rebuilt, but only while they are not attached yet (reruns leave running apps alone).
+  if dokku network:exists hello-net >/dev/null 2>&1; then
+    echo "network hello-net already exists"
+  else
+    dokku network:create hello-net
+  fi
+  attach_network hello attach-post-deploy
+  attach_network hello-multi initial-network
+
   docker compose up -d --build pierhead
   cat <<MSG
 
@@ -83,6 +102,8 @@ reset() {
     done
   fi
   docker compose down -v --remove-orphans
+  # hello-net lives on the host daemon, outside Dokku's volume.
+  docker network rm hello-net 2>/dev/null || true
   # Anything labelled at deploy time that survived (e.g. Dokku was already stopped).
   docker ps -aq --filter label=pierhead.dev=1 | xargs docker rm -f 2>/dev/null || true
   # A fresh Dokku gets fresh host keys.

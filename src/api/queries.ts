@@ -8,6 +8,7 @@ import {
   getConfig,
   getDeploys,
   getHost,
+  getHostDetails,
   getHostMetrics,
   getNetworks,
 } from "./client";
@@ -37,6 +38,14 @@ export const backupQuery = queryOptions({ queryKey: ["backup"], queryFn: getBack
 export const networksQuery = queryOptions({
   queryKey: ["networks"],
   queryFn: getNetworks,
+  ...poll,
+});
+// The server caches this for 60s, so polling faster only repeats the same answer.
+export const hostDetailsQuery = queryOptions({
+  queryKey: ["host", "details"],
+  queryFn: getHostDetails,
+  ...poll,
+  refetchInterval: 60_000,
 });
 
 export const appQuery = (name: string) =>

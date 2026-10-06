@@ -20,9 +20,11 @@ import type {
   AppDetail,
   AppSummary,
   BackupStatus,
+  HostDetails,
   HostStats,
   LogEndEvent,
   LogEvent,
+  Network,
 } from "../../shared/types";
 import {
   ApiError,
@@ -32,7 +34,9 @@ import {
   fetchConfigKeys,
   fetchConfigValue,
   fetchDokku,
+  fetchHostDetails,
   fetchHostMetrics,
+  fetchNetworks,
   postQuickAction,
   putConfigVar,
   streamLogs,
@@ -41,6 +45,7 @@ import {
 import {
   activity,
   backup,
+  hostDetails,
   type LogProfile,
   networks,
   type RawApp,
@@ -193,10 +198,20 @@ export async function unsetConfigVar(app: AppView, key: string, restart: boolean
   await latency();
 }
 
-export async function getNetworks() {
+const mockNetworks = async () => {
   await latency();
   return networks;
-}
+};
+
+const mockHostDetails = async () => {
+  await latency();
+  return hostDetails;
+};
+
+export const getNetworks: () => Promise<Network[]> =
+  dataSource === "api" ? fetchNetworks : mockNetworks;
+export const getHostDetails: () => Promise<HostDetails> =
+  dataSource === "api" ? fetchHostDetails : mockHostDetails;
 
 export async function getActivity() {
   await latency();

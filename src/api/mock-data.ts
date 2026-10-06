@@ -8,7 +8,9 @@ import type {
   Build,
   ConfigVar,
   Deploy,
+  HostDetails,
   Network,
+  Plugin,
 } from "../../shared/types";
 
 const minute = 60_000;
@@ -300,23 +302,75 @@ export const networks: Network[] = [
   {
     name: "insta-down-net",
     driver: "bridge",
-    subnet: "172.19.0.0/16",
+    scope: "local",
+    dokkuManaged: true,
+    internal: false,
     members: [
-      { app: "insta-down", alias: null },
-      { app: "insta-down-api", alias: "backend" },
+      { app: "insta-down", via: ["attach-post-deploy"] },
+      { app: "insta-down-api", via: ["initial-network", "attach-post-deploy"] },
     ],
   },
   {
     name: "bridge",
     driver: "bridge",
-    subnet: "172.17.0.0/16",
+    scope: "local",
+    dokkuManaged: false,
+    internal: false,
     members: [
-      { app: "signal-flags", alias: null },
-      { app: "ledger-lite", alias: null },
-      { app: "lighthouse", alias: null },
+      { app: "signal-flags", via: ["attach-post-create"] },
+      { app: "ledger-lite", via: ["attach-post-create"] },
+      { app: "lighthouse", via: ["attach-post-create"] },
     ],
   },
+  {
+    name: "host",
+    driver: "host",
+    scope: "local",
+    dokkuManaged: false,
+    internal: false,
+    members: [],
+  },
 ];
+
+const corePlugin = (name: string): Plugin => ({
+  name,
+  version: "0.38.31",
+  enabled: true,
+  core: true,
+});
+
+export const hostDetails: HostDetails = {
+  dokku: {
+    version: "0.38.31",
+    globalDomains: ["192.168.2.13.sslip.io"],
+    proxyType: "nginx",
+    scheduler: "docker-local",
+    builder: { selected: null, buildDir: null },
+    deployBranch: "master",
+    plugins: [
+      ...["apps", "builder-dockerfile", "builder-herokuish", "domains", "network"].map(
+        corePlugin,
+      ),
+      { name: "postgres", version: "1.41.0", enabled: true, core: false },
+    ],
+    sshKeys: [
+      {
+        name: "viktor-laptop",
+        fingerprint: "SHA256:3q2+7wAfBqrN0Gm9a1lVn2v8mXr0pZQe5h1KJcT4dUo",
+      },
+      {
+        name: "github-deploy",
+        fingerprint: "SHA256:Zx0n4pLkYw8eVd1cQ7sRtB2mHfA9oUj6iNg3KyE5PaM",
+      },
+    ],
+  },
+  pierhead: {
+    writesEnabled: false,
+    cacheTtlMs: 5_000,
+    metrics: "not-configured",
+    ssh: { user: "dokku", host: "192.168.2.13", port: 22 },
+  },
+};
 
 export const activity: Activity[] = [
   {

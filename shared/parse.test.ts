@@ -1,16 +1,24 @@
 import { describe, expect, test } from "bun:test";
+import hostGlobal from "./fixtures/host-global-reports.json";
 import logs from "./fixtures/logs.json";
 import multiDomain from "./fixtures/multi-domain.json";
 import neverDeployed from "./fixtures/never-deployed.json";
 import running from "./fixtures/running.json";
 import stopped from "./fixtures/stopped.json";
 import {
+  buildNetworks,
   needsGitRev,
   parseAppDetail,
   parseAppSummary,
+  parseDokkuHost,
   parseLogEvent,
+  parseNetworkList,
   parseReport,
+  parseSshKeys,
 } from "./parse";
+
+const fixtureText = (name: string) =>
+  Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).text();
 
 // Fixtures are `dokku <plugin>:report <app> --format json` captured from Dokku 0.38.31.
 
@@ -174,5 +182,110 @@ describe("parseLogEvent", () => {
       process: "worker.2",
       line: "",
     });
+  });
+});
+
+// Host and network fixtures are raw stdout captured from Dokku 0.38.31 as the restricted
+// `dokku` user: `hello` attaches `hello-net` after deploy, `hello-multi` as its initial network.
+
+describe("networks", () => {
+  const appNames = ["hello", "hello-multi", "hello-new", "hello-stopped"];
+
+  test("each listed network gets the apps that attach it, and how", async () => {
+    const networks = parseNetworkList(await fixtureText("network-list.json"));
+    expect(networks.map((n) => n.name).sort()).toEqual([
+      "bridge",
+      "hello-net",
+      "host",
+      "none",
+      "pierhead_default",
+    ]);
+    const reports = (await fixtureText("network-report-all.ndjson"))
+      .trim()
+      .split("\n")
+      .map(parseReport);
+    const apps = appNames.map((name, i) => ({ name, report: reports[i] ?? {} }));
+
+    const built = buildNetworks(networks, apps);
+    // In use first, then by name.
+    expect(built.map((n) => n.name)).toEqual([
+      "hello-net",
+      "bridge",
+      "host",
+      "none",
+      "pierhead_default",
+    ]);
+    const named = (name: string) => built.find((n) => n.name === name);
+    expect(named("hello-net")).toEqual({
+      name: "hello-net",
+      driver: "bridge",
+      scope: "local",
+      dokkuManaged: true,
+      internal: false,
+      members: [
+        { app: "hello", via: ["attach-post-deploy"] },
+        { app: "hello-multi", via: ["initial-network"] },
+      ],
+    });
+    expect(named("bridge")?.dokkuManaged).toBe(false);
+    expect(named("bridge")?.members).toEqual([]);
+  });
+
+  test("an app on a network through several settings lists each once", () => {
+    const [net] = parseNetworkList(
+      '[{"Name":"n","Driver":"bridge","Scope":"local","DokkuManaged":true,"Internal":false}]',
+    );
+    if (!net) throw new Error("no network parsed");
+    const report = {
+      "computed-initial-network": "n",
+      "computed-attach-post-create": "other n",
+      "computed-attach-post-deploy": "",
+    };
+    expect(buildNetworks([net], [{ name: "a", report }])[0]?.members).toEqual([
+      { app: "a", via: ["initial-network", "attach-post-create"] },
+    ]);
+  });
+
+  test("rejects a list that is not network objects", () => {
+    expect(() => parseNetworkList('["bridge"]')).toThrow("network:list");
+    expect(() => parseNetworkList('[{"Name":"n"}]')).toThrow("Driver");
+  });
+});
+
+describe("parseDokkuHost", () => {
+  test("reads the global settings, plugins and key names", async () => {
+    const host = parseDokkuHost({
+      version: (await fixtureText("version.txt")).trim(),
+      ...hostGlobal,
+      plugins: await fixtureText("plugin-list.json"),
+      sshKeys: await fixtureText("ssh-keys.json"),
+    });
+    expect(host).toMatchObject({
+      version: "0.38.31",
+      globalDomains: ["dokku.localhost"],
+      proxyType: "nginx",
+      scheduler: "docker-local",
+      builder: { selected: null, buildDir: null },
+      deployBranch: "master",
+    });
+    expect(host.plugins).toContainEqual({
+      name: "network",
+      version: "0.38.31",
+      enabled: true,
+      core: true,
+    });
+    expect(host.plugins.every((p) => p.core)).toBe(true);
+    expect(host.sshKeys).toEqual([
+      {
+        name: "pierhead-dev",
+        fingerprint: "SHA256:/+zYMrfQTE20fmp4uyImTXJlyIX+UoKSd2zjfq2jLbM",
+      },
+    ]);
+  });
+
+  test("SSH keys keep no key material, and no keys is an empty list", async () => {
+    const [key] = parseSshKeys(await fixtureText("ssh-keys.json"));
+    expect(Object.keys(key ?? {})).toEqual(["name", "fingerprint"]);
+    expect(parseSshKeys("")).toEqual([]);
   });
 });

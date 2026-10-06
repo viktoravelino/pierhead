@@ -1,14 +1,16 @@
 import {
+  buildNetworks,
   needsGitRev,
   parseAppDetail,
   parseAppSummary,
+  parseNetworkList,
   parseReport,
   type Report,
 } from "../shared/parse";
-import type { AppDetail, AppSummary } from "../shared/types";
+import type { AppDetail, AppSummary, Network } from "../shared/types";
 import type { Dokku, DokkuError, DokkuResult } from "./dokku";
 
-type Outcome<T> = { ok: true; value: T } | { ok: false; error: DokkuError };
+export type Outcome<T> = { ok: true; value: T } | { ok: false; error: DokkuError };
 
 /** Carries a failed Dokku call out of the parsing code below. */
 class DokkuFailure extends Error {
@@ -18,13 +20,13 @@ class DokkuFailure extends Error {
 }
 
 /** Unwraps a result's stdout, throwing `DokkuFailure` when the call failed. */
-function stdoutOf(result: DokkuResult) {
+export function stdoutOf(result: DokkuResult) {
   if (!result.ok) throw new DokkuFailure(result.error);
   return result.stdout;
 }
 
 /** Runs `read`, turning a thrown `DokkuFailure` or parse error into an `Outcome`. */
-async function outcome<T>(read: () => Promise<T>): Promise<Outcome<T>> {
+export async function outcome<T>(read: () => Promise<T>): Promise<Outcome<T>> {
   try {
     return { ok: true, value: await read() };
   } catch (e) {
@@ -100,6 +102,29 @@ export const listApps = (dokku: Dokku) =>
           gitRev: await gitRevOf(dokku, name, git),
         });
       }),
+    );
+  });
+
+/**
+ * Docker's networks and the apps attached to each: `network:list`, `apps:list` and the
+ * all-apps `network:report`, three SSH calls in parallel however many apps there are.
+ * Zipped by position like `listApps`, with the same retry on a length mismatch.
+ */
+export const listNetworks = (dokku: Dokku) =>
+  outcome<Network[]>(async () => {
+    const [networks, names, reports] = await Promise.all([
+      dokku("network:list"),
+      dokku("apps:list"),
+      dokku("network:report"),
+    ]);
+    const appNames = parseNames(stdoutOf(names));
+    const appReports = parseReportLines(stdoutOf(reports));
+    if (appReports.length !== appNames.length) {
+      throw new Error("App list changed while reading reports; retry");
+    }
+    return buildNetworks(
+      parseNetworkList(stdoutOf(networks)),
+      appNames.map((name, i) => ({ name, report: appReports[i] ?? {} })),
     );
   });
 

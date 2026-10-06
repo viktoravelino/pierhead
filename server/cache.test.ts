@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createReadCache, loadCacheTtl } from "./cache";
+import { cacheKeys, createReadCache, invalidateApp, loadCacheTtl } from "./cache";
 
 /** A clock the test moves by hand. */
 function fakeClock() {
@@ -131,5 +131,25 @@ describe("loadCacheTtl", () => {
         "PIERHEAD_CACHE_TTL_MS",
       );
     }
+  });
+});
+
+describe("invalidateApp", () => {
+  test("drops the app's entries, the list and the networks derived from it", async () => {
+    const cache = createReadCache(5_000);
+    const keys = [
+      cacheKeys.list,
+      cacheKeys.networks,
+      cacheKeys.app("hello"),
+      cacheKeys.config("hello"),
+      cacheKeys.app("other"),
+    ];
+    const loaders = keys.map(() => countingLoader());
+    for (const [i, key] of keys.entries())
+      await cache.get(key, loaders[i]?.load ?? (async () => 0));
+    invalidateApp(cache, "hello");
+    for (const [i, key] of keys.entries())
+      await cache.get(key, loaders[i]?.load ?? (async () => 0));
+    expect(loaders.map((l) => l.calls())).toEqual([2, 2, 2, 2, 1]);
   });
 });
