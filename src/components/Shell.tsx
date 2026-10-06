@@ -7,7 +7,7 @@ import {
   Moon,
   Network,
   Search,
-  Settings,
+  Server,
   Sun,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -62,10 +62,10 @@ const allNav = [
     isActive: (p: string) => p.startsWith("/activity"),
   },
   {
-    label: "Settings",
-    to: "/settings",
-    Icon: Settings,
-    isActive: (p: string) => p.startsWith("/settings"),
+    label: "Host",
+    to: "/host",
+    Icon: Server,
+    isActive: (p: string) => p.startsWith("/host"),
   },
 ] as const;
 
@@ -149,10 +149,9 @@ export function Shell() {
               <div>
                 {dataSource === "api" ? (
                   <p>
-                    Live from Dokku: apps, host version, logs and config. Live from
-                    Glances: host CPU, memory and disk, when configured. Sample data:
-                    deploys, networks, settings. Actions and config changes run on Dokku
-                    when the server allows writes.
+                    Live from Dokku: apps, networks, host settings, logs and config. Live
+                    from Glances: host CPU, memory and disk, when configured. Actions and
+                    config changes run on Dokku when the server allows writes.
                   </p>
                 ) : (
                   <p>Design preview. All data is mocked; nothing reaches the host.</p>

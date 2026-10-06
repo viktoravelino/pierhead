@@ -1,6 +1,9 @@
 /** Default lifetime of a cached read; keeps polling tabs from multiplying SSH calls. */
 export const defaultCacheTtlMs = 5_000;
 
+/** Lifetime of the host page's Dokku read: plugins, keys and global settings rarely change. */
+export const hostCacheTtlMs = 60_000;
+
 /** Reads `PIERHEAD_CACHE_TTL_MS`: milliseconds, `0` turns the cache off. Throws on garbage. */
 export function loadCacheTtl(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.PIERHEAD_CACHE_TTL_MS?.trim();
@@ -63,11 +66,21 @@ export type ReadCache = ReturnType<typeof createReadCache>;
 /** Cache keys of the read endpoints. */
 export const cacheKeys = {
   list: "apps",
+  networks: "networks",
+  host: "host",
   app: (name: string) => `app:${name}`,
   config: (name: string) => `config:${name}`,
 };
 
-/** Drops what a change to `name` can alter: its detail, its config names and the list. */
+/**
+ * Drops what a change to `name` can alter: its detail, its config names, the list and the
+ * networks (which are derived from every app's report).
+ */
 export function invalidateApp(cache: ReadCache, name: string) {
-  cache.invalidate(cacheKeys.list, cacheKeys.app(name), cacheKeys.config(name));
+  cache.invalidate(
+    cacheKeys.list,
+    cacheKeys.networks,
+    cacheKeys.app(name),
+    cacheKeys.config(name),
+  );
 }

@@ -1,0 +1,50 @@
+{
+  "domains": {
+    "global-enabled": "true",
+    "global-vhosts": "dokku.localhost"
+  },
+  "proxy": {
+    "computed-proxy-port": "",
+    "computed-proxy-ssl-port": "",
+    "computed-type": "nginx",
+    "global-proxy-port": "",
+    "global-proxy-ssl-port": "",
+    "global-type": "",
+    "proxy-computed-proxy-port": "",
+    "proxy-computed-proxy-ssl-port": "",
+    "proxy-computed-type": "nginx",
+    "proxy-global-proxy-port": "",
+    "proxy-global-proxy-ssl-port": "",
+    "proxy-global-type": ""
+  },
+  "scheduler": {
+    "computed-selected": "docker-local",
+    "computed-shell": "",
+    "global-selected": "",
+    "global-shell": "",
+    "scheduler-computed-selected": "docker-local",
+    "scheduler-computed-shell": "",
+    "scheduler-global-selected": "",
+    "scheduler-global-shell": ""
+  },
+  "builder": {
+    "builder-computed-skip-cleanup": "false",
+    "builder-global-build-dir": "",
+    "builder-global-selected": "",
+    "builder-global-skip-cleanup": "",
+    "computed-skip-cleanup": "false",
+    "global-build-dir": "",
+    "global-selected": "",
+    "global-skip-cleanup": ""
+  },
+  "git": {
+    "computed-archive-max-files": "10000",
+    "computed-archive-max-size": "1073741824",
+    "computed-deploy-branch": "master",
+    "computed-keep-git-dir": "false",
+    "global-archive-max-files": "",
+    "global-archive-max-size": "",
+    "global-deploy-branch": "",
+    "global-keep-git-dir": ""
+  }
+}

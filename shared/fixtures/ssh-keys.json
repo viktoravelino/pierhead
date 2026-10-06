@@ -1,0 +1,8 @@
+[
+  {
+    "fingerprint": "SHA256:/+zYMrfQTE20fmp4uyImTXJlyIX+UoKSd2zjfq2jLbM",
+    "name": "pierhead-dev",
+    "SSHCOMMAND_ALLOWED_KEYS": "no-agent-forwarding,no-user-rc,no-X11-forwarding,no-port-forwarding",
+    "public-key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICKT7VPf+0/BS1gY/t08ezpYQiJg/AqdbjesmYNnUUk4 pierhead-dev"
+  }
+]

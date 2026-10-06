@@ -1,0 +1,62 @@
+[
+  {
+    "CreatedAt": "2024-02-25T01:55:24.275184461Z",
+    "DokkuManaged": false,
+    "Driver": "bridge",
+    "ID": "53daa2eeade5",
+    "Internal": false,
+    "IPv6": false,
+    "Labels": {
+      "com.docker.compose.config-hash": "d9a239204750fd3491af54ae67045f8c6f6d1e8a2fc3aa771e453775f869b9d0",
+      "com.docker.compose.network": "default",
+      "com.docker.compose.project": "pierhead",
+      "com.docker.compose.version": "5.1.2"
+    },
+    "Name": "pierhead_default",
+    "Scope": "local"
+  },
+  {
+    "CreatedAt": "2024-02-25T01:55:24.275184461Z",
+    "DokkuManaged": false,
+    "Driver": "bridge",
+    "ID": "959bda182c6c",
+    "Internal": false,
+    "IPv6": false,
+    "Labels": {},
+    "Name": "bridge",
+    "Scope": "local"
+  },
+  {
+    "CreatedAt": "2024-02-25T01:55:24.275184461Z",
+    "DokkuManaged": true,
+    "Driver": "bridge",
+    "ID": "dff2135fffab",
+    "Internal": false,
+    "IPv6": false,
+    "Labels": { "com.dokku.network-name": "hello-net" },
+    "Name": "hello-net",
+    "Scope": "local"
+  },
+  {
+    "CreatedAt": "2024-02-25T01:55:24.275184461Z",
+    "DokkuManaged": false,
+    "Driver": "host",
+    "ID": "9a2eac714719",
+    "Internal": false,
+    "IPv6": false,
+    "Labels": {},
+    "Name": "host",
+    "Scope": "local"
+  },
+  {
+    "CreatedAt": "2024-02-25T01:55:24.275184461Z",
+    "DokkuManaged": false,
+    "Driver": "null",
+    "ID": "1c99f837d080",
+    "Internal": false,
+    "IPv6": false,
+    "Labels": {},
+    "Name": "none",
+    "Scope": "local"
+  }
+]

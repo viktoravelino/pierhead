@@ -15,7 +15,9 @@ This is a design POC with a growing live backend (Hono on Bun, talking to Dokku 
 | Logs tab: recent lines, then new lines as they happen | Live: `dokku logs --tail` streamed as server-sent events (`GET /api/apps/:name/logs`) |
 | Config tab: variable names, one value on Reveal, set and unset | Live: `config:keys`, `config:get`, `config:set`, `config:unset` (see below) |
 | Host CPU, memory and disk meters and sparklines; OS, kernel, cores, memory, uptime | Live: Glances REST API, when `GLANCES_URL` is set (see below); otherwise a "Metrics not connected" state |
-| Deploy history, networks page, activity, backup | Sample data |
+| Networks page: Docker networks and the apps attached to each, and how (`GET /api/networks`) | Live: `network:list` plus the all-apps `network:report`, cached with the app list |
+| Host page: Dokku version, global domain, proxy, scheduler, builder, deploy branch, plugins, SSH key names and fingerprints, pierhead's own config (`GET /api/host`) | Live: `version`, `--global` reports, `plugin:list`, `ssh-keys:list`; cached 60 s |
+| Deploy history, activity, backup | Not shown in `api` mode (mock only) |
 | Start, Stop, Restart, Rebuild, set/unset config vars | Live when writes are enabled (see below); refused otherwise |
 
 ## App actions and the write switch

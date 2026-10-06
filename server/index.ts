@@ -9,10 +9,16 @@ import {
   parseConfigSetBody,
   parseConfigValue,
 } from "../shared/config";
-import { parseLogEvent, stripAnsi } from "../shared/parse";
-import type { LogEndEvent } from "../shared/types";
-import { getApp, isNotFound, listApps } from "./apps";
-import { cacheKeys, createReadCache, invalidateApp, loadCacheTtl } from "./cache";
+import { parseDokkuVersion, parseLogEvent, stripAnsi } from "../shared/parse";
+import type { LogEndEvent, PierheadConfig } from "../shared/types";
+import { getApp, isNotFound, listApps, listNetworks } from "./apps";
+import {
+  cacheKeys,
+  createReadCache,
+  hostCacheTtlMs,
+  invalidateApp,
+  loadCacheTtl,
+} from "./cache";
 import {
   createDokku,
   type DokkuError,
@@ -21,6 +27,7 @@ import {
   loadDokkuConfig,
   logTail,
 } from "./dokku";
+import { readDokkuHost } from "./host";
 import { createHostMetrics, loadGlancesUrl } from "./metrics";
 import { loadStaticDir, serveUi } from "./static";
 import { loadWriteGate } from "./writes";
@@ -30,7 +37,10 @@ const config = loadDokkuConfig();
 const dokku = createDokku(config);
 const writeGate = loadWriteGate();
 // Shared by list, detail and config-name reads; every change below invalidates its app.
-const readCache = createReadCache(loadCacheTtl());
+const cacheTtlMs = loadCacheTtl();
+const readCache = createReadCache(cacheTtlMs);
+// The host page's Dokku read lives longer than the app reads; PIERHEAD_CACHE_TTL_MS=0 still turns it off.
+const hostCache = createReadCache(cacheTtlMs === 0 ? 0 : hostCacheTtlMs);
 const hostMetrics = createHostMetrics(loadGlancesUrl());
 
 // Comment-line pings keep idle log streams under Bun's idle timeout and expose dead clients.
@@ -89,8 +99,7 @@ const app = new Hono()
   .get("/api/health", async (c) => {
     const result = await dokku("version");
     if (!result.ok) return c.json(result, 502);
-    // `dokku version` prints "dokku version 0.38.31".
-    const version = result.stdout.replace(/^dokku version\s+/, "");
+    const version = parseDokkuVersion(result.stdout);
     const { status: metrics } = await hostMetrics.snapshot();
     return c.json({
       ok: true,
@@ -104,6 +113,33 @@ const app = new Hono()
   .get("/api/host/metrics", async (c) =>
     c.json({ ok: true, ...(await hostMetrics.snapshot()) } as const),
   )
+  // Dokku's host settings (cached 60s) beside pierhead's own configuration (read live).
+  .get("/api/host", async (c) => {
+    const dokkuHost = await hostCache.get(
+      cacheKeys.host,
+      () => readDokkuHost(dokku),
+      (r) => r.ok,
+    );
+    if (!dokkuHost.ok) return c.json(dokkuHost, 502);
+    const { status: metrics } = await hostMetrics.snapshot();
+    const pierhead: PierheadConfig = {
+      writesEnabled: writeGate.enabled,
+      cacheTtlMs,
+      metrics,
+      ssh: { user: config.user, host: config.host, port: config.port },
+    };
+    return c.json({ ok: true, dokku: dokkuHost.value, pierhead } as const);
+  })
+  // Docker networks with the apps Dokku attaches to each; invalidated with the app list.
+  .get("/api/networks", async (c) => {
+    const result = await readCache.get(
+      cacheKeys.networks,
+      () => listNetworks(dokku),
+      (r) => r.ok,
+    );
+    if (!result.ok) return c.json(result, 502);
+    return c.json({ ok: true, networks: result.value } as const);
+  })
   .get("/api/apps", async (c) => {
     const result = await readCache.get(
       cacheKeys.list,

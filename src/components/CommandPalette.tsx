@@ -10,7 +10,7 @@ import {
   Play,
   RotateCw,
   Search,
-  Settings,
+  Server,
   Square,
 } from "lucide-react";
 import {
@@ -51,7 +51,7 @@ const allPages = [
   { label: "Apps", to: "/", Icon: LayoutGrid },
   { label: "Networks", to: "/networks", Icon: Network },
   { label: "Activity", to: "/activity", Icon: Activity },
-  { label: "Settings", to: "/settings", Icon: Settings },
+  { label: "Host", to: "/host", Icon: Server },
 ] as const;
 
 // Activity has no real data source yet.

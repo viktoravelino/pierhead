@@ -190,11 +190,71 @@ export type HostMetricsBody =
       history: HostMetricsHistory;
     };
 
+/** The `network:report` settings through which an app joins a network. */
+export type NetworkAttachment =
+  | "initial-network"
+  | "attach-post-create"
+  | "attach-post-deploy";
+
+/**
+ * A Docker network on the host (`network:list`) and the apps Dokku attaches to it.
+ * Dokku reports no subnets and no aliases, so neither is here.
+ */
 export type Network = {
   name: string;
   driver: string;
-  subnet: string;
-  members: { app: string; alias: string | null }[];
+  scope: string;
+  /** Created through `network:create`; false for Docker's own and other tools' networks. */
+  dokkuManaged: boolean;
+  internal: boolean;
+  /** Apps with this network in their report, and the setting(s) that attach them. */
+  members: { app: string; via: NetworkAttachment[] }[];
+};
+
+export type Plugin = {
+  name: string;
+  version: string;
+  enabled: boolean;
+  /** Ships with Dokku, as `plugin:list` reports it. */
+  core: boolean;
+};
+
+/** A registered SSH key. The key material itself is never read. */
+export type SshKey = {
+  name: string;
+  fingerprint: string;
+};
+
+/** What Dokku reports about the host: global settings, plugins and registered keys. */
+export type DokkuHost = {
+  version: string;
+  /** Global vhost domains; apps get `<app>.<domain>` unless overridden. */
+  globalDomains: string[];
+  /** e.g. "nginx"; null when Dokku does not say. */
+  proxyType: string | null;
+  /** e.g. "docker-local". */
+  scheduler: string | null;
+  /** The global builder default; null means Dokku detects one per app. */
+  builder: { selected: string | null; buildDir: string | null };
+  deployBranch: string | null;
+  plugins: Plugin[];
+  sshKeys: SshKey[];
+};
+
+/** Pierhead's own server configuration. */
+export type PierheadConfig = {
+  writesEnabled: boolean;
+  /** Lifetime of the app read cache; 0 means off. */
+  cacheTtlMs: number;
+  metrics: HostMetricsBody["status"];
+  /** What the server connects to over SSH. */
+  ssh: { user: string; host: string; port: number };
+};
+
+/** What `GET /api/host` carries besides `ok: true`. */
+export type HostDetails = {
+  dokku: DokkuHost;
+  pierhead: PierheadConfig;
 };
 
 export type Activity = {

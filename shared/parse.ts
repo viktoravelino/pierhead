@@ -7,11 +7,16 @@ import type {
   AppStatus,
   AppSummary,
   Build,
+  DokkuHost,
   LogEvent,
+  Network,
+  NetworkAttachment,
+  Plugin,
   PortMapping,
   Process,
   ProcessState,
   Revision,
+  SshKey,
 } from "./types";
 
 export type Report = Record<string, string>;
@@ -108,6 +113,78 @@ export function parseNetworks(report: Report): AppNetwork[] {
   return [...new Set(names)].map((name) => ({ name, alias: null }));
 }
 
+const networkAttachments = [
+  "initial-network",
+  "attach-post-create",
+  "attach-post-deploy",
+] as const satisfies readonly NetworkAttachment[];
+
+/** A network as `network:list --format json` describes it, before apps are attached. */
+export type NetworkInfo = Omit<Network, "members">;
+
+/** An app's name with its `network:report`, as the all-apps report is zipped with `apps:list`. */
+export type AppNetworkReport = { name: string; report: Report };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Parses a `--format json` list command's stdout (empty means no entries) into objects. */
+function parseObjectList(stdout: string, command: string) {
+  if (!stdout) return [];
+  const value: unknown = JSON.parse(stdout);
+  if (!Array.isArray(value) || !value.every(isRecord)) {
+    throw new Error(`Expected a JSON array of objects from ${command}`);
+  }
+  return value;
+}
+
+function str(entry: Record<string, unknown>, key: string, command: string) {
+  const value = entry[key];
+  if (typeof value !== "string")
+    throw new Error(`${command}: "${key}" should be a string`);
+  return value;
+}
+
+function bool(entry: Record<string, unknown>, key: string, command: string) {
+  const value = entry[key];
+  if (typeof value !== "boolean") {
+    throw new Error(`${command}: "${key}" should be a boolean`);
+  }
+  return value;
+}
+
+/** `network:list --format json`: `[{ Name, Driver, Scope, DokkuManaged, Internal, ... }]`. */
+export const parseNetworkList = (stdout: string): NetworkInfo[] =>
+  parseObjectList(stdout, "network:list").map((n) => ({
+    name: str(n, "Name", "network:list"),
+    driver: str(n, "Driver", "network:list"),
+    scope: str(n, "Scope", "network:list"),
+    dokkuManaged: bool(n, "DokkuManaged", "network:list"),
+    internal: bool(n, "Internal", "network:list"),
+  }));
+
+/**
+ * Each network with the apps whose `network:report` names it, and through which setting.
+ * Apps that set nothing are not listed anywhere: they get Docker's default bridge, which
+ * Dokku does not report. A report naming a network `network:list` lacks is dropped.
+ */
+export const buildNetworks = (
+  networks: NetworkInfo[],
+  apps: AppNetworkReport[],
+): Network[] =>
+  networks
+    .map((network) => ({
+      ...network,
+      members: apps.flatMap(({ name, report }) => {
+        const via = networkAttachments.filter((setting) =>
+          words(report[`computed-${setting}`]).includes(network.name),
+        );
+        return via.length > 0 ? [{ app: name, via }] : [];
+      }),
+    }))
+    // Networks in use first, then by name; `network:list` order is Docker's.
+    .sort((a, b) => b.members.length - a.members.length || a.name.localeCompare(b.name));
+
 const isSha = (value: string | undefined): value is string =>
   value !== undefined && /^[0-9a-f]{7,64}$/.test(value);
 
@@ -186,6 +263,56 @@ export function parseAppDetail(name: string, r: DetailReports): AppDetail {
     proxyType: parseProxyType(r.proxy),
     ports: parsePorts(r.ports, status.kind !== "not-deployed" && proxyEnabled),
     networks: parseNetworks(r.network),
+  };
+}
+
+/** `dokku version` prints "dokku version 0.38.31". */
+export const parseDokkuVersion = (stdout: string) =>
+  stdout.replace(/^dokku version\s+/, "");
+
+/** `plugin:list --format json`: `[{ name, version, enabled, core, description, ... }]`. */
+export const parsePlugins = (stdout: string): Plugin[] =>
+  parseObjectList(stdout, "plugin:list").map((p) => ({
+    name: str(p, "name", "plugin:list"),
+    version: str(p, "version", "plugin:list"),
+    enabled: bool(p, "enabled", "plugin:list"),
+    core: bool(p, "core", "plugin:list"),
+  }));
+
+/** `ssh-keys:list --format json`; only the name and fingerprint are kept, never the key. */
+export const parseSshKeys = (stdout: string): SshKey[] =>
+  parseObjectList(stdout, "ssh-keys:list").map((k) => ({
+    name: str(k, "name", "ssh-keys:list"),
+    fingerprint: str(k, "fingerprint", "ssh-keys:list"),
+  }));
+
+/** The raw output of the commands behind the host page; reports are `--global` ones. */
+export type HostReads = {
+  version: string;
+  domains: Report;
+  proxy: Report;
+  scheduler: Report;
+  builder: Report;
+  git: Report;
+  plugins: string;
+  sshKeys: string;
+};
+
+export function parseDokkuHost(r: HostReads): DokkuHost {
+  return {
+    version: parseDokkuVersion(r.version),
+    globalDomains:
+      r.domains["global-enabled"] === "true" ? words(r.domains["global-vhosts"]) : [],
+    proxyType: parseProxyType(r.proxy),
+    scheduler: r.scheduler["computed-selected"] || null,
+    // Only the global setting: empty means each app's builder is detected at deploy.
+    builder: {
+      selected: r.builder["global-selected"] || null,
+      buildDir: r.builder["global-build-dir"] || null,
+    },
+    deployBranch: r.git["computed-deploy-branch"] || null,
+    plugins: parsePlugins(r.plugins),
+    sshKeys: parseSshKeys(r.sshKeys),
   };
 }
 
