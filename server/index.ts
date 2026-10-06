@@ -22,6 +22,7 @@ import {
   logTail,
 } from "./dokku";
 import { createHostMetrics, loadGlancesUrl } from "./metrics";
+import { loadStaticDir, serveUi } from "./static";
 import { loadWriteGate } from "./writes";
 
 // Fails fast with a readable message when the SSH env is missing or malformed.
@@ -368,6 +369,10 @@ const app = new Hono()
       }
     });
   });
+
+// Production serves the built UI from this same process; dev uses Vite's proxy instead.
+const staticDir = loadStaticDir();
+if (staticDir) serveUi(app, staticDir);
 
 /** Route types for the frontend's typed `hc` client. */
 export type AppType = typeof app;

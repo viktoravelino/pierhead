@@ -1,0 +1,12 @@
+.git
+.dev
+.env*
+!.env.example
+node_modules
+dist
+docker
+scripts
+compose.yaml
+*.md
+*.tsbuildinfo
+.vite

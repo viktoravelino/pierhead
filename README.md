@@ -105,6 +105,26 @@ bun run lint       # biome check
 bun run format     # biome check --write
 ```
 
+## Deploying
+
+The `Dockerfile` builds one image: the UI (`VITE_DATA_SOURCE=api`) and the API server bundled with `bun build --target bun`, on `oven/bun:1.4-slim` with only `openssh-client` added, running as the non-root `bun` user (uid 1000). The server serves `dist/` itself when `NODE_ENV=production` (set in the image) or `PIERHEAD_STATIC_DIR` is set: hashed `/assets/*` are immutable, `index.html` is `no-cache`, and any other non-`/api` GET falls back to `index.html`. Health stays at `/api/health`; the image's `HEALTHCHECK` uses it (so it reports unhealthy while Dokku is unreachable).
+
+```sh
+docker build -t pierhead:local .   # add --platform linux/amd64 when building on arm64 for an amd64 host
+docker run -d --init -p 127.0.0.1:3010:3001 \
+  -e DOKKU_SSH_HOST=<host> -e DOKKU_SSH_KEY=/run/secrets/pierhead/id_ed25519 \
+  -e GLANCES_URL=http://<host>:61208 \
+  -v /path/to/key-dir:/run/secrets/pierhead:ro \
+  -v pierhead-ssh:/var/lib/pierhead pierhead:local
+```
+
+- Env: `DOKKU_SSH_HOST` and `DOKKU_SSH_KEY` are required; `DOKKU_SSH_PORT`, `DOKKU_SSH_USER` (default `dokku`), `GLANCES_URL`, `PIERHEAD_ALLOW_WRITES` (unset = read-only) and `PIERHEAD_CACHE_TTL_MS` are optional. `DOKKU_SSH_KNOWN_HOSTS` defaults to `/var/lib/pierhead/known_hosts` in the image.
+- The key file must be readable by uid 1000 and not by others (mode 600; ssh refuses it otherwise). Mount it read-only.
+- Host key: the server uses `StrictHostKeyChecking=accept-new`, which writes `known_hosts`. Mount a writable volume on `/var/lib/pierhead` (a fresh named volume inherits the image's ownership); a read-only mount makes the first connection fail. Forget a changed host key by deleting that file.
+- Use `--init` (compose: `init: true`): the ssh control master is reparented to PID 1. The control socket lives in `/tmp`.
+
+The production Compose service, the Caddy route and the setup notes are in the homelab repo: `config/infra-stack/compose.yaml`, `config/infra-stack/caddy/Caddyfile`, `config/infra-stack/.env.example` and the "pierhead" section of `config/infra-stack/README.md`.
+
 ## Mock data seam
 
 Components only talk to `src/api/queries.ts`, which calls `src/api/client.ts`. That module is the single place that picks mock or real (`VITE_DATA_SOURCE`, with `src/api/backend.ts` as the HTTP client); it returns the domain types in `shared/types.ts`. Fixtures (`mock-data.ts`) hold raw Dokku `--format json` report maps, and `parse.ts` turns them into those types.
